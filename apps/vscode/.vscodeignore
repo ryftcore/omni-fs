@@ -1,5 +1,21 @@
+# Everything the extension host does not need at runtime.
+#
+# The extension ships as ONE bundled file (out/extension.js, built by
+# esbuild.mjs). Source, type declarations, build tooling and dependencies are
+# all excluded — shipping node_modules for four protocol SDKs would multiply
+# the package size and slow activation.
+
 .vscode/**
+.turbo/**
 src/**
 node_modules/**
+
+esbuild.mjs
 tsconfig.json
 *.tsbuildinfo
+*.vsix
+
+# Bundled output only: no declarations, no sourcemaps in a production package.
+out/**/*.d.ts
+out/**/*.d.ts.map
+out/**/*.map

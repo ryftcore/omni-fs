@@ -231,7 +231,7 @@
     "dev": "node esbuild.mjs --watch",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
-    "package": "node esbuild.mjs --production && vsce package --no-dependencies",
+    "package": "rm -rf out && node esbuild.mjs --production && vsce package --no-dependencies",
     "clean": "rm -rf out *.tsbuildinfo"
   },
   "dependencies": {
@@ -247,5 +247,13 @@
     "typescript": "^5.6.0",
     "esbuild": "^0.24.0",
     "@vscode/vsce": "^3.2.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ryftcore/omni-fs.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ryftcore/omni-fs/issues"
+  },
+  "homepage": "https://github.com/ryftcore/omni-fs#readme"
 }
