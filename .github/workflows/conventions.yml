@@ -11,6 +11,14 @@ jobs:
   commit-titles:
     name: commit titles
     runs-on: ubuntu-latest
+
+    # Bots generate their own message format and cannot be made to match
+    # `:emoji: <type> <description>`: Dependabot always inserts a colon after
+    # its configured prefix, producing `:arrow_up: build: Bump ...`. The
+    # convention exists for human contributors, so skip bot PRs rather than
+    # loosening the rule for everyone.
+    if: ${{ !endsWith(github.event.pull_request.user.login, '[bot]') }}
+
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
