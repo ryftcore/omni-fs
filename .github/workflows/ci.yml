@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm build
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      - run: pnpm test
+
+      # Catches an accidental `import * as vscode` in packages/* even if the
+      # lint config is ever weakened. The boundary is the architecture; it is
+      # worth checking twice.
+      - name: Verify host-agnostic boundary
+        run: |
+          if grep -rnE "from '(vscode|electron)'" packages/ --include='*.ts'; then
+            echo "::error::packages/ must not import a host API. See docs/architecture.md"
+            exit 1
+          fi
+          echo "Boundary intact."

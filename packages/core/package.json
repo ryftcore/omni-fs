@@ -1,0 +1,28 @@
+{
+  "name": "@omni-fs/core",
+  "version": "0.0.0",
+  "description": "Host-agnostic contracts and orchestration for omni-fs. No protocol SDKs, no UI, no host APIs.",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "name": "@omni-fs/provider-webdav",
+  "version": "0.0.0",
+  "description": "WebDAV provider for omni-fs",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsc -b --watch",
+    "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
+    "lint": "eslint src",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@omni-fs/core": "workspace:*",
+    "webdav": "^5.7.1"
+  },
+  "devDependencies": {
+    "@omni-fs/testing": "workspace:*",
+    "@types/node": "^22.8.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

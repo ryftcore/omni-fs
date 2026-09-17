@@ -1,0 +1,251 @@
+{
+  "name": "omni-fs-vscode",
+  "displayName": "Omni-FS",
+  "description": "Browse and edit remote files over S3, FTP, FTPS, SFTP and WebDAV directly in VS Code",
+  "version": "0.0.1",
+  "publisher": "ryftcore",
+  "license": "MIT",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "vscode": "^1.90.0",
+    "node": ">=22"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "s3",
+    "ftp",
+    "ftps",
+    "sftp",
+    "webdav",
+    "remote",
+    "filesystem"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onFileSystem:omnifs"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "omni-fs",
+          "title": "Omni-FS",
+          "icon": "resources/omni-fs.svg"
+        }
+      ]
+    },
+    "views": {
+      "omni-fs": [
+        {
+          "id": "omniFs.connections",
+          "name": "Connections"
+        },
+        {
+          "id": "omniFs.transfers",
+          "name": "Transfers"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "omniFs.connections",
+        "contents": "No connections yet.\n[Add Connection](command:omniFs.addConnection)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "omniFs.addConnection",
+        "title": "Add Connection",
+        "category": "Omni-FS",
+        "icon": "$(add)"
+      },
+      {
+        "command": "omniFs.editConnection",
+        "title": "Edit Connection",
+        "category": "Omni-FS",
+        "icon": "$(edit)"
+      },
+      {
+        "command": "omniFs.removeConnection",
+        "title": "Remove Connection",
+        "category": "Omni-FS",
+        "icon": "$(trash)"
+      },
+      {
+        "command": "omniFs.connect",
+        "title": "Connect",
+        "category": "Omni-FS",
+        "icon": "$(plug)"
+      },
+      {
+        "command": "omniFs.disconnect",
+        "title": "Disconnect",
+        "category": "Omni-FS",
+        "icon": "$(debug-disconnect)"
+      },
+      {
+        "command": "omniFs.mountAsWorkspaceFolder",
+        "title": "Open as Workspace Folder",
+        "category": "Omni-FS",
+        "icon": "$(root-folder)"
+      },
+      {
+        "command": "omniFs.refresh",
+        "title": "Refresh",
+        "category": "Omni-FS",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "omniFs.download",
+        "title": "Download\u2026",
+        "category": "Omni-FS",
+        "icon": "$(cloud-download)"
+      },
+      {
+        "command": "omniFs.upload",
+        "title": "Upload\u2026",
+        "category": "Omni-FS",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "omniFs.cancelTransfer",
+        "title": "Cancel Transfer",
+        "category": "Omni-FS",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "omniFs.clearCompletedTransfers",
+        "title": "Clear Completed",
+        "category": "Omni-FS",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "omniFs.addConnection",
+          "when": "view == omniFs.connections",
+          "group": "navigation@1"
+        },
+        {
+          "command": "omniFs.refresh",
+          "when": "view == omniFs.connections",
+          "group": "navigation@2"
+        },
+        {
+          "command": "omniFs.clearCompletedTransfers",
+          "when": "view == omniFs.transfers",
+          "group": "navigation@1"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "omniFs.connect",
+          "when": "view == omniFs.connections && viewItem == connection.disconnected",
+          "group": "inline@1"
+        },
+        {
+          "command": "omniFs.disconnect",
+          "when": "view == omniFs.connections && viewItem == connection.connected",
+          "group": "inline@1"
+        },
+        {
+          "command": "omniFs.mountAsWorkspaceFolder",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\./",
+          "group": "1_open@1"
+        },
+        {
+          "command": "omniFs.editConnection",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\./",
+          "group": "9_manage@1"
+        },
+        {
+          "command": "omniFs.removeConnection",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\./",
+          "group": "9_manage@2"
+        },
+        {
+          "command": "omniFs.download",
+          "when": "view == omniFs.connections && viewItem == entry.file",
+          "group": "inline@1"
+        },
+        {
+          "command": "omniFs.upload",
+          "when": "view == omniFs.connections && viewItem == entry.directory",
+          "group": "inline@1"
+        },
+        {
+          "command": "omniFs.cancelTransfer",
+          "when": "view == omniFs.transfers && viewItem == transfer.active",
+          "group": "inline@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Omni-FS",
+      "properties": {
+        "omniFs.connections": {
+          "type": "array",
+          "default": [],
+          "scope": "resource",
+          "markdownDescription": "Connection definitions. Credentials are **never** stored here \u2014 they live in the OS keychain via VS Code's secret storage, so this list is safe to commit and share with your team.",
+          "items": {
+            "type": "object"
+          }
+        },
+        "omniFs.cache.ttlSeconds": {
+          "type": "number",
+          "default": 15,
+          "description": "How long directory listings stay cached before being re-fetched."
+        },
+        "omniFs.connection.idleTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "Close a connection after this many seconds of inactivity. Set to 0 to keep connections open."
+        },
+        "omniFs.transfers.maxConcurrent": {
+          "type": "number",
+          "default": 4,
+          "description": "Maximum simultaneous transfers across all connections. Per-connection limits still apply."
+        },
+        "omniFs.logLevel": {
+          "type": "string",
+          "enum": [
+            "trace",
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info",
+          "description": "Verbosity of the Omni-FS output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "dev": "node esbuild.mjs --watch",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src",
+    "package": "node esbuild.mjs --production && vsce package --no-dependencies",
+    "clean": "rm -rf out *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@omni-fs/core": "workspace:*",
+    "@omni-fs/provider-ftp": "workspace:*",
+    "@omni-fs/provider-s3": "workspace:*",
+    "@omni-fs/provider-sftp": "workspace:*",
+    "@omni-fs/provider-webdav": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.8.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.6.0",
+    "esbuild": "^0.24.0",
+    "@vscode/vsce": "^3.2.0"
+  }
+}

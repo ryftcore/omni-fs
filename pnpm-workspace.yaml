@@ -1,0 +1,18 @@
+packages:
+  - packages/*
+  - apps/*
+
+# Explicit allowlist so a fresh `pnpm install` is non-interactive for
+# contributors. esbuild backs vitest; ssh2's install script is a native speedup
+# for the SFTP provider; unrs-resolver backs eslint-plugin-import-x.
+#
+# cpu-features is denied on purpose: it is an optional ssh2 optimisation that
+# needs node-gyp and a C++ toolchain, and it fails loudly on a machine without
+# one. ssh2 falls back to its pure-JS crypto and works fine.
+allowBuilds:
+  '@vscode/vsce-sign': false
+  cpu-features: false
+  esbuild: true
+  keytar: false
+  ssh2: true
+  unrs-resolver: true
