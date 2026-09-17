@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      publish_marketplace:
+        description: 'Also publish to the VS Code Marketplace'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: build and release
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # create the GitHub release and upload the .vsix
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # A tag that disagrees with the manifest produces a .vsix whose version
+      # does not match the release it is attached to. Catch it before building.
+      - name: Tag matches extension version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(node -p "require('./apps/vscode/package.json').version")
+          echo "tag=$tag manifest=$manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match apps/vscode/package.json version $manifest."
+            exit 1
+          fi
+
+      # Never ship a release that would not have passed CI.
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm test
+
+      - name: Package extension
+        run: pnpm --filter omni-fs-vscode package
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2
+        if: startsWith(github.ref, 'refs/tags/v')
+        with:
+          files: apps/vscode/*.vsix
+          generate_release_notes: true
+          draft: true # review before it goes out
+          fail_on_unmatched_files: true
+
+      # Marketplace publishing is opt-in, so the workflow stays useful for
+      # producing a release artifact long before anyone is ready to publish.
+      #
+      # The PAT check lives in the script, not in `if:`. The `secrets` context
+      # is not available to step conditions, so guarding there would silently
+      # evaluate to false and skip the publish without explanation.
+      - name: Publish to VS Code Marketplace
+        if: ${{ inputs.publish_marketplace }}
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${VSCE_PAT:-}" ]; then
+            echo "::error::publish_marketplace was requested but the VSCE_PAT repository secret is not set."
+            exit 1
+          fi
+          pnpm --filter omni-fs-vscode exec vsce publish --no-dependencies --pat "$VSCE_PAT"

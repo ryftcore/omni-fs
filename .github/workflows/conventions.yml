@@ -1,0 +1,72 @@
+name: Conventions
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  commit-titles:
+    name: commit titles
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # omni-fs uses single-line commit titles: `:emoji: <type> <description>`
+      # (see CONTRIBUTING.md). Checking it here keeps the history readable
+      # without a commit-msg hook everyone has to install locally.
+      - name: Validate commit message format
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          pattern='^:[a-z0-9_+-]+: (feat|fix|docs|refactor|test|build|chore|perf|style|ci) .+'
+          failed=0
+
+          while IFS= read -r sha; do
+            subject=$(git log -1 --format=%s "$sha")
+            body=$(git log -1 --format=%b "$sha")
+
+            if ! printf '%s' "$subject" | grep -qE "$pattern"; then
+              echo "::error::Bad commit title: '$subject'"
+              echo "  Expected: :emoji: <type> <description>   e.g. ':sparkles: feat add SFTP provider'"
+              failed=1
+            fi
+
+            if [ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+              echo "::error::Commit $sha has a body; omni-fs uses title-only commits."
+              failed=1
+            fi
+          # --no-merges: a merge commit from main carries GitHub's own
+          # "Merge branch ..." subject, which no contributor authored.
+          done < <(git rev-list --no-merges "$BASE_SHA".."$HEAD_SHA")
+
+          if [ "$failed" -eq 1 ]; then
+            exit 1
+          fi
+          echo "All commit titles conform."
+
+  formatting:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm format:check

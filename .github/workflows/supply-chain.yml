@@ -1,0 +1,63 @@
+name: Supply Chain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Daily: a dependency becomes vulnerable while you sleep, not while you edit.
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: audit dependencies
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Unlike dependency-review, this works on a private repo today.
+      - name: pnpm audit
+        run: pnpm audit --audit-level moderate
+
+  lockfile:
+    name: lockfile integrity
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # --frozen-lockfile already fails on drift, but saying so explicitly means
+      # the failure reads as "someone edited package.json without installing"
+      # rather than a generic install error.
+      - name: Lockfile matches manifests
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: No unexpected install scripts
+        run: |
+          # allowBuilds in pnpm-workspace.yaml is an explicit allowlist of
+          # packages permitted to run postinstall scripts. A new entry is a
+          # supply-chain decision and should be reviewed, not absorbed.
+          echo "Currently allowed to run install scripts:"
+          sed -n '/^allowBuilds:/,/^$/p' pnpm-workspace.yaml

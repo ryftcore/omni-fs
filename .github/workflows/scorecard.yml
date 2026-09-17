@@ -1,0 +1,52 @@
+name: OpenSSF Scorecard
+
+on:
+  branch_protection_rule:
+  schedule:
+    - cron: '32 3 * * 2'
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analysis:
+    name: scorecard
+    runs-on: ubuntu-latest
+
+    # Scorecard grades open-source supply-chain posture and needs a public repo
+    # to read branch protection, releases and CI config. Skips until then.
+    if: >-
+      github.event.repository.visibility == 'public' ||
+      github.event_name == 'workflow_dispatch'
+
+    permissions:
+      security-events: write # upload the SARIF to the Security tab
+      id-token: write # sign the results so they can be verified
+      contents: read
+      actions: read
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - uses: ossf/scorecard-action@05b42c624433fc40578a4040d5cf5e36ddca8cde # v2.4.2
+        with:
+          results_file: results.sarif
+          results_format: sarif
+          # Opt out of the public dataset by default; flip to true if you want
+          # an OpenSSF badge on the README once the repo is public.
+          publish_results: false
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: scorecard-results
+          path: results.sarif
+          retention-days: 5
+
+      - uses: github/codeql-action/upload-sarif@4bd7200e1f146b1c937cae12d258b50f41a53cf8 # v4.38.0
+        with:
+          sarif_file: results.sarif

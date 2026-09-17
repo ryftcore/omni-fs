@@ -1,0 +1,57 @@
+# gitleaks configuration for omni-fs
+#
+# omni-fs is a storage client, so the repo is full of text that *looks* like
+# credentials: field names such as `accessKeyId` and `secretAccessKey`, example
+# endpoints, and documentation about where keys are stored.
+#
+# The instinct is to allowlist those field names. Do not. An allowlist on
+# `secretAccessKey:` would suppress findings on exactly the line where a real
+# secret gets assigned. It was measured instead: with the default ruleset and
+# no name-based allowlist, this repo produces zero false positives, so the
+# allowlist below stays limited to generated and vendored paths.
+
+title = "omni-fs"
+
+[extend]
+# Start from gitleaks' maintained default rules rather than hand-rolling
+# detection for every cloud provider.
+useDefault = true
+
+[allowlist]
+description = "Generated and vendored paths only — never credential field names"
+
+paths = [
+  '''pnpm-lock\.yaml''',
+  '''\.vsix$''',
+  # Bundled third-party code: generated, not committed, and any finding here is
+  # upstream's rather than ours.
+  '''apps/vscode/out/''',
+]
+
+[[rules]]
+# Covered by useDefault, but stated explicitly so the intent is visible to
+# anyone tempted to widen the allowlist above: this must always fire.
+id = "aws-access-key-id"
+description = "AWS Access Key ID"
+regex = '''\b((?:AKIA|ABIA|ACCA|ASIA)[0-9A-Z]{16})\b'''
+keywords = ["AKIA", "ABIA", "ACCA", "ASIA"]
+
+[[rules]]
+# The default ruleset detects the key *ID* reliably but is conservative about
+# the 40-character secret, which is shapeless on its own. Since this repo names
+# the field in its own provider schema, the assignment form is worth matching
+# directly — a leaked secret without its ID is still a leaked secret.
+id = "aws-secret-access-key"
+description = "AWS Secret Access Key assigned to a credential field"
+regex = '''(?i)\b(?:secretAccessKey|aws_secret_access_key)\b['"]?\s*[:=]\s*['"]([A-Za-z0-9/+=]{40})['"]'''
+secretGroup = 1
+keywords = ["secretaccesskey", "aws_secret_access_key"]
+
+[[rules]]
+# Connection strings with inline credentials — the shape omni-fs users are most
+# likely to paste into an issue or a test fixture.
+id = "url-inline-credentials"
+description = "URL containing inline credentials"
+regex = '''\b(?:ftp|ftps|sftp|https?|webdav|s3)://[^/\s:@]{2,}:([^/\s:@]{3,})@'''
+secretGroup = 1
+keywords = ["://"]

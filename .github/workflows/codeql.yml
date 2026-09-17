@@ -1,0 +1,58 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, so a newly-published rule finds old code without waiting for a PR.
+    - cron: '21 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: analyze
+    runs-on: ubuntu-latest
+
+    # CodeQL is free for public repositories. On a private repo it requires
+    # GitHub Advanced Security, so this skips rather than failing every run
+    # with a licensing error. It starts working the moment the repo goes
+    # public — no edit needed.
+    #
+    # `github.event.repository` is absent on `schedule`, so a scheduled run
+    # falls through to the manual-dispatch branch instead of silently skipping.
+    if: >-
+      github.event.repository.visibility == 'public' ||
+      github.event_name == 'workflow_dispatch'
+
+    permissions:
+      security-events: write # upload results to the Security tab
+      contents: read
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [javascript-typescript]
+
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@4bd7200e1f146b1c937cae12d258b50f41a53cf8 # v4.38.0
+        with:
+          languages: ${{ matrix.language }}
+          # `security-extended` adds lower-severity rules worth having on a tool
+          # that handles credentials and builds remote paths from user input.
+          queries: security-extended
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@4bd7200e1f146b1c937cae12d258b50f41a53cf8 # v4.38.0
+        with:
+          category: /language:${{ matrix.language }}

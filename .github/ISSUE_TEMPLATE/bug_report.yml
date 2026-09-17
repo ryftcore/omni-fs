@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in omni-fs does not work
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you write anything: do not paste credentials.**
+
+        That includes access keys, passwords, SSH keys, session tokens, and
+        endpoint URLs with credentials embedded (`ftps://user:pass@host`).
+        Redact them. If you have already pasted one somewhere, rotate it.
+
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Protocol
+      options: [S3 / S3-compatible, FTP, FTPS, SFTP, WebDAV, Not protocol-specific]
+    validations:
+      required: true
+
+  - type: input
+    id: server
+    attributes:
+      label: Server software
+      description: >-
+        S3-compatible servers disagree with AWS about error codes, so this
+        usually matters. e.g. AWS S3, MinIO RELEASE.2024-01-01, Cloudflare R2,
+        vsftpd 3.0.5, Nextcloud 28.
+      placeholder: MinIO RELEASE.2024-01-01
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Output channel
+      description: >-
+        Set `omniFs.logLevel` to `debug`, reproduce, then paste the relevant
+        part of the **Omni-FS** output channel. Check it for credentials before
+        posting.
+      render: text
+
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: omni-fs 0.0.1, VS Code 1.95.0, macOS 15.1
+    validations:
+      required: true
