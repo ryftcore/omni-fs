@@ -22,14 +22,14 @@
     "package:vsix": "turbo run package --filter=omni-fs-vscode"
   },
   "devDependencies": {
-    "@eslint/js": "^9.13.0",
-    "@types/node": "^22.8.0",
-    "eslint": "^9.13.0",
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^26.5.1",
+    "eslint": "^10.10.0",
     "eslint-plugin-import-x": "^4.3.0",
     "prettier": "^3.3.3",
     "turbo": "^2.2.0",
-    "typescript": "^5.6.0",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.11.0",
-    "vitest": "^4.1.11"
+    "vitest": "^5.0.0"
   }
 }
