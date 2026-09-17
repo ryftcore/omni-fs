@@ -1,0 +1,31 @@
+<!-- Marketplace icon source. vsce rejects SVG icons, so regenerate the PNG after editing:
+       rsvg-convert -w 128 -h 128 resources/icon.svg -o resources/icon.png -->
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1E293B"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="top" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#7DD3FC"/>
+      <stop offset="1" stop-color="#22B8F0"/>
+    </linearGradient>
+    <linearGradient id="mid" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#3B82F6"/>
+      <stop offset="1" stop-color="#2563EB"/>
+    </linearGradient>
+    <linearGradient id="low" x1="0.1" y1="0" x2="0.9" y2="1">
+      <stop offset="0" stop-color="#4338CA"/>
+      <stop offset="1" stop-color="#312E81"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+
+  <!-- Stacked layers, drawn bottom-up so each overlaps the one below.
+       Filled rather than stroked: a thin outline disappears at the 42px the
+       marketplace renders this at in search results. -->
+  <path d="M64 68 L100 86 L64 104 L28 86 Z" fill="url(#low)"/>
+  <path d="M64 46 L100 64 L64 82 L28 64 Z" fill="url(#mid)"/>
+  <path d="M64 24 L100 42 L64 60 L28 42 Z" fill="url(#top)"/>
+</svg>

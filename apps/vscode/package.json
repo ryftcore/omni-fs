@@ -232,7 +232,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint src",
     "package": "rm -rf out && node esbuild.mjs --production && vsce package --no-dependencies",
-    "clean": "rm -rf out *.tsbuildinfo"
+    "clean": "rm -rf out *.tsbuildinfo",
+    "prepublishOnly": "echo \"Omni-FS is a VS Code extension: publish with 'pnpm --filter omni-fs-vscode exec vsce publish', not npm.\" && exit 1"
   },
   "dependencies": {
     "@omni-fs/core": "workspace:*",
@@ -255,5 +256,10 @@
   "bugs": {
     "url": "https://github.com/ryftcore/omni-fs/issues"
   },
-  "homepage": "https://github.com/ryftcore/omni-fs#readme"
+  "homepage": "https://github.com/ryftcore/omni-fs#readme",
+  "icon": "resources/icon.png",
+  "galleryBanner": {
+    "color": "#0B1220",
+    "theme": "dark"
+  }
 }

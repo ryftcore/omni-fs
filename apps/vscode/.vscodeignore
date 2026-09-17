@@ -19,3 +19,7 @@ tsconfig.json
 out/**/*.d.ts
 out/**/*.d.ts.map
 out/**/*.map
+
+# Source for the marketplace icon; only resources/icon.png is shipped.
+# Regenerate with: rsvg-convert -w 128 -h 128 resources/icon.svg -o resources/icon.png
+resources/icon.svg
