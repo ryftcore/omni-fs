@@ -56,7 +56,7 @@ jobs:
       - run: pnpm test
 
       - name: Package extension
-        run: pnpm --filter omni-fs-vscode package
+        run: pnpm package:vsix
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@72f2c25fcb47643c292f7107632f7a47c1df5cd8 # v2.3.2

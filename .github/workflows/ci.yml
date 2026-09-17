@@ -99,8 +99,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       # Proves every PR still produces an installable .vsix, rather than
-      # discovering a packaging break at release time.
-      - run: pnpm --filter omni-fs-vscode package
+      # discovering a packaging break at release time. Goes through turbo so
+      # the workspace packages are built first — the extension bundles their
+      # dist output and cannot resolve them otherwise.
+      - run: pnpm package:vsix
 
       - name: Check the bundle stayed lean
         run: |

@@ -16,14 +16,15 @@ Requires Node 22+ and pnpm 12+ (the `allowBuilds` key in `pnpm-workspace.yaml` n
 
 ## Commands
 
-| Command          | What it does                                      |
-| ---------------- | ------------------------------------------------- |
-| `pnpm build`     | Build every package in dependency order           |
-| `pnpm dev`       | Watch mode across the workspace                   |
-| `pnpm typecheck` | Type check without emitting                       |
-| `pnpm test`      | Unit tests and the conformance suite              |
-| `pnpm lint`      | ESLint, including the architecture boundary rules |
-| `pnpm format`    | Prettier                                          |
+| Command             | What it does                                                     |
+| ------------------- | ---------------------------------------------------------------- |
+| `pnpm build`        | Build every package in dependency order                          |
+| `pnpm dev`          | Watch mode across the workspace                                  |
+| `pnpm typecheck`    | Type check without emitting                                      |
+| `pnpm test`         | Unit tests and the conformance suite                             |
+| `pnpm lint`         | ESLint, including the architecture boundary rules                |
+| `pnpm format`       | Prettier                                                         |
+| `pnpm package:vsix` | Build a `.vsix` into `apps/vscode/` (builds the workspace first) |
 
 Run `pnpm build && pnpm typecheck && pnpm test && pnpm lint` before opening a PR.
 CI runs exactly that.
