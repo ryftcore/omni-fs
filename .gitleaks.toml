@@ -55,3 +55,16 @@ description = "URL containing inline credentials"
 regex = '''\b(?:ftp|ftps|sftp|https?|webdav|s3)://[^/\s:@]{2,}:([^/\s:@]{3,})@'''
 secretGroup = 1
 keywords = ["://"]
+# This repo documents the shape it is trying to catch — the issue template
+# literally warns against pasting `ftps://user:pass@host`. Rather than
+# allowlisting the docs wholesale (which would also hide a real secret pasted
+# into a doc), require the password to look random. A placeholder like `pass`
+# scores about 1.5; a real credential clears 3.0 comfortably.
+entropy = 3.0
+
+[[rules.allowlists]]
+description = "Obvious placeholder credentials in documentation"
+regexTarget = "line"
+regexes = [
+  '''(?i)://(?:user|username|<user>|USERNAME):(?:pass|password|<pass(?:word)?>|secret|xxx+)@''',
+]
