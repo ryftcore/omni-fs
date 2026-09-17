@@ -1,4 +1,6 @@
 // @ts-check
+// Named .mjs so Node does not have to guess the module type; the root
+// package.json is intentionally not "type": "module".
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 
