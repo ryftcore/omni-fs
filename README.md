@@ -59,7 +59,7 @@ pnpm build
 Then open the repo in VS Code and press <kbd>F5</kbd> to launch the extension in
 a development host.
 
-Requires Node 22+ and pnpm 10+.
+Requires Node 22+ and pnpm 12+ (the `allowBuilds` key in `pnpm-workspace.yaml` needs pnpm 12).
 
 ## Layout
 

@@ -11,7 +11,7 @@ pnpm install
 pnpm build
 ```
 
-Requires Node 22+ and pnpm 10+. Open the repo in VS Code and press
+Requires Node 22+ and pnpm 12+ (the `allowBuilds` key in `pnpm-workspace.yaml` needs pnpm 12). Open the repo in VS Code and press
 <kbd>F5</kbd> to launch the extension in a development host.
 
 ## Commands
