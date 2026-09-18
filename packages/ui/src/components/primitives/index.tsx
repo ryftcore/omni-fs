@@ -10,6 +10,15 @@ import type { ConnectionState } from '@omni-fs/core';
  * Native elements also bring keyboard and screen-reader behaviour for free.
  */
 
+/**
+ * The id FormRow's error message renders under, when it renders one at all.
+ * Exported so a caller can pass the same id to TextField/Select as
+ * `describedBy`, associating the input with its error for a screen reader.
+ */
+export function errorId(htmlFor: string, hasError: boolean): string | undefined {
+  return hasError ? `${htmlFor}-error` : undefined;
+}
+
 export function FormRow(props: {
   readonly label: string;
   readonly htmlFor: string;
@@ -18,7 +27,7 @@ export function FormRow(props: {
   readonly error?: string | undefined;
   readonly children: ReactNode;
 }): ReactNode {
-  const describedBy = props.error !== undefined ? `${props.htmlFor}-error` : undefined;
+  const describedBy = errorId(props.htmlFor, props.error !== undefined);
   return (
     <div className="omni-row">
       <label htmlFor={props.htmlFor}>
@@ -43,6 +52,7 @@ export function TextField(props: {
   readonly placeholder?: string | undefined;
   readonly invalid?: boolean | undefined;
   readonly readOnly?: boolean | undefined;
+  readonly describedBy?: string | undefined;
   readonly onChange: (value: string) => void;
 }): ReactNode {
   return (
@@ -54,6 +64,7 @@ export function TextField(props: {
       placeholder={props.placeholder}
       readOnly={props.readOnly === true}
       aria-invalid={props.invalid === true}
+      aria-describedby={props.describedBy}
       onChange={(event: ChangeEvent<HTMLInputElement>) => props.onChange(event.target.value)}
     />
   );
@@ -78,6 +89,7 @@ export function Select(props: {
   readonly id: string;
   readonly value: string;
   readonly options: readonly { readonly value: string; readonly label: string }[];
+  readonly describedBy?: string | undefined;
   readonly onChange: (value: string) => void;
 }): ReactNode {
   return (
@@ -85,6 +97,7 @@ export function Select(props: {
       className="omni-select"
       id={props.id}
       value={props.value}
+      aria-describedby={props.describedBy}
       onChange={(event: ChangeEvent<HTMLSelectElement>) => props.onChange(event.target.value)}
     >
       {props.options.map((option) => (

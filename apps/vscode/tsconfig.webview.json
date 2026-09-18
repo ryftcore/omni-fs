@@ -21,5 +21,9 @@
   },
   // protocol.ts is the shared wire contract with the extension host's own
   // program (tsconfig.json) and belongs in both: it is pure types, no DOM.
-  "include": ["src/webview/**/*.ts", "src/webview/**/*.tsx"]
+  // connection-manager-panel.ts is host-only — it imports "vscode" — and is
+  // excluded below so it is typechecked solely by the Node program
+  // (tsconfig.json), which already covers it.
+  "include": ["src/webview/**/*.ts", "src/webview/**/*.tsx"],
+  "exclude": ["src/webview/connection-manager-panel.ts"]
 }

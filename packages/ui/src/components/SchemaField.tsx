@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import type { FieldView } from '../model/field-view.js';
-import { Button, Checkbox, FormRow, Select, TextField } from './primitives/index.js';
+import { Button, Checkbox, errorId, FormRow, Select, TextField } from './primitives/index.js';
 
 /** A dumb switch over `FieldControl`. All decisions were made by `fieldView`. */
 export function SchemaField(props: {
@@ -12,6 +12,7 @@ export function SchemaField(props: {
   const { view } = props;
   const id = `omni-${view.section}-${view.key}`;
   const control = view.control;
+  const describedBy = errorId(id, view.error !== undefined);
 
   const inner = ((): ReactNode => {
     switch (control.kind) {
@@ -23,13 +24,20 @@ export function SchemaField(props: {
             id={id}
             value={control.value}
             options={control.options}
+            describedBy={describedBy}
             onChange={props.onChange}
           />
         );
       case 'file':
         return (
           <span className="omni-actions">
-            <TextField id={id} type="text" value={control.value} onChange={props.onChange} />
+            <TextField
+              id={id}
+              type="text"
+              value={control.value}
+              describedBy={describedBy}
+              onChange={props.onChange}
+            />
             <Button onClick={props.onPickFile}>Browse…</Button>
           </span>
         );
@@ -42,6 +50,7 @@ export function SchemaField(props: {
               value={control.value}
               placeholder={control.placeholder}
               invalid={view.error !== undefined}
+              describedBy={describedBy}
               onChange={props.onChange}
             />
             {control.stored && <Button onClick={props.onClear}>Clear</Button>}
@@ -55,6 +64,7 @@ export function SchemaField(props: {
             value={control.value}
             placeholder={control.placeholder}
             invalid={view.error !== undefined}
+            describedBy={describedBy}
             onChange={props.onChange}
           />
         );

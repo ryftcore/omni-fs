@@ -8,7 +8,7 @@ import type {
 } from '@omni-fs/core';
 import { fieldView } from '../model/field-view.js';
 import type { TestState } from '../model/reducer.js';
-import { Button, Checkbox, FormRow, TextField } from './primitives/index.js';
+import { Button, Checkbox, errorId, FormRow, TextField } from './primitives/index.js';
 import { SchemaField } from './SchemaField.js';
 
 export function ConnectionForm(props: {
@@ -69,6 +69,7 @@ export function ConnectionForm(props: {
           value={props.draft.label}
           placeholder="production-bucket"
           invalid={errorFor('label', 'label') !== undefined}
+          describedBy={errorId('omni-label', errorFor('label', 'label') !== undefined)}
           onChange={props.onLabelChange}
         />
       </FormRow>
