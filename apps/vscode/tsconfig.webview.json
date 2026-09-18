@@ -1,0 +1,25 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // The webview is bundled by esbuild (see esbuild.mjs) into a separate
+    // browser bundle; tsc here is for type checking only. A browser context,
+    // not Node: "dom" supplies window/document/MessageEvent, and there is no
+    // "vscode" module here at all — only `acquireVsCodeApi()`, declared
+    // locally in backend.ts.
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "ESNext.Disposable", "DOM", "DOM.Iterable"],
+    // No Node globals in a browser context either — mirrors packages/ui's own
+    // tsconfig, which sets this the same way for the same reason.
+    "types": []
+  },
+  // protocol.ts is the shared wire contract with the extension host's own
+  // program (tsconfig.json) and belongs in both: it is pure types, no DOM.
+  "include": ["src/webview/**/*.ts", "src/webview/**/*.tsx"]
+}

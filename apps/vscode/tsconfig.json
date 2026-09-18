@@ -12,9 +12,13 @@
     "incremental": false,
     "declaration": false,
     "declarationMap": false,
-    "jsx": "react-jsx",
-    "lib": ["ES2023", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["node", "vscode"]
   },
-  "include": ["src/**/*.ts", "src/**/*.tsx"]
+  // The extension host runs in Node, not a browser: no "dom" lib, so a stray
+  // browser global (document, window, fetch) is a compile error here, not a
+  // silent pass. `protocol.ts` is included because it is the shared wire
+  // contract the host side also imports; it is pure types with no DOM. The
+  // browser-only webview files have their own program: tsconfig.webview.json.
+  "include": ["src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["src/webview/index.tsx", "src/webview/backend.ts", "src/webview/css.d.ts"]
 }

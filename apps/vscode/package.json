@@ -229,7 +229,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "dev": "node esbuild.mjs --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "lint": "eslint src",
     "package": "rm -rf out && node esbuild.mjs --production && vsce package --no-dependencies",
     "clean": "rm -rf out *.tsbuildinfo",
