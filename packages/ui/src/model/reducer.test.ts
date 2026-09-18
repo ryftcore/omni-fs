@@ -180,6 +180,38 @@ describe('managerReducer: the unsaved-changes guard', () => {
     expect(cancelled.pendingSelection).toBeUndefined();
     expect(cancelled.draft?.settings['host']).toBe('changed');
   });
+
+  it('does not leave dirty state stale when the pending selection disappears', () => {
+    // settings.json edited by hand: while a dirty edit is pending and another
+    // selection is held back by the guard, the target of that pending
+    // selection is itself removed. Once the confirm discards the draft with
+    // nothing to replace it, `dirty` and `errors` must not still describe it.
+    const dirty = managerReducer(loaded, {
+      type: 'fieldChanged',
+      section: 'settings',
+      key: 'host',
+      value: '',
+    });
+    const held = managerReducer(dirty, {
+      type: 'selectRequested',
+      target: { kind: 'connection', id: 'c2' },
+    });
+    const changed = managerReducer(held, { type: 'connectionsChanged', connections: [prod] });
+    const confirmed = managerReducer(changed, { type: 'selectConfirmed' });
+
+    expect(confirmed.draft).toBeUndefined();
+    expect(confirmed.dirty).toBe(false);
+    expect(confirmed.errors).toEqual([]);
+
+    // With no draft left to lose, a further selection must apply immediately
+    // rather than being held back by a stale dirty flag.
+    const next = managerReducer(confirmed, {
+      type: 'selectRequested',
+      target: { kind: 'connection', id: 'c1' },
+    });
+    expect(next.selection).toEqual({ kind: 'connection', id: 'c1' });
+    expect(next.pendingSelection).toBeUndefined();
+  });
 });
 
 describe('managerReducer: new and duplicate', () => {
@@ -191,6 +223,8 @@ describe('managerReducer: new and duplicate', () => {
     expect(fresh.selection).toEqual({ kind: 'new', providerId: 'demo' });
     expect(fresh.draft?.id).toBeUndefined();
     expect(fresh.draft?.label).toBe('');
+    // Never saved, so nothing to compare against: Save must be reachable.
+    expect(fresh.dirty).toBe(true);
   });
 
   it('duplicates settings but never credentials', () => {
@@ -205,6 +239,8 @@ describe('managerReducer: new and duplicate', () => {
       key: 'password',
       message: 'Password is required',
     });
+    // Never saved, so nothing to compare against: Save must be reachable.
+    expect(copy.dirty).toBe(true);
   });
 });
 
@@ -227,6 +263,32 @@ describe('managerReducer: saving', () => {
     expect(saved.dirty).toBe(false);
     expect(saved.draft?.label).toBe('renamed');
     expect(saved.selection).toEqual({ kind: 'connection', id: 'c1' });
+  });
+
+  it('rebaselines a brand-new draft even if no connectionsChanged arrives first', () => {
+    // The race the in-place rebaseline guards against: the backend acks the
+    // save before (or without) a list-changed event ever mentioning the new
+    // connection's id.
+    const fresh = managerReducer(loaded, {
+      type: 'selectRequested',
+      target: { kind: 'new', providerId: 'demo' },
+    });
+    const filled = run(
+      [
+        { type: 'labelChanged', value: 'newconn' },
+        { type: 'fieldChanged', section: 'settings', key: 'host', value: 'new.example.com' },
+        { type: 'fieldChanged', section: 'secret', key: 'password', value: 'hunter2' },
+      ],
+      fresh,
+    );
+
+    const saved = run([{ type: 'saveStarted' }, { type: 'saveSucceeded', id: 'c3' }], filled);
+
+    expect(saved.draft?.id).toBe('c3');
+    expect(saved.dirty).toBe(false);
+    expect(saved.draft?.label).toBe('newconn');
+    expect(saved.draft?.settings['host']).toBe('new.example.com');
+    expect(saved.selection).toEqual({ kind: 'connection', id: 'c3' });
   });
 
   it('keeps the draft and surfaces the message when a save fails', () => {

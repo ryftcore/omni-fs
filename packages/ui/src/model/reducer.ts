@@ -253,7 +253,7 @@ function providerFor(state: ManagerState, id: ProviderId | undefined): ProviderS
 /** Rebuilds the draft for a selection and clears everything derived from the old one. */
 function applySelection(state: ManagerState, selection: Selection): ManagerState {
   if (selection.kind === 'none') {
-    return { ...state, selection, draft: undefined, ...cleared() };
+    return { ...state, selection, draft: undefined, dirty: false, errors: [], ...cleared() };
   }
 
   if (selection.kind === 'new') {
@@ -265,7 +265,14 @@ function applySelection(state: ManagerState, selection: Selection): ManagerState
   const connection = state.connections.find((candidate) => candidate.id === selection.id);
   const provider = providerFor(state, connection?.providerId);
   if (connection === undefined || provider === undefined) {
-    return { ...state, selection: { kind: 'none' }, draft: undefined, ...cleared() };
+    return {
+      ...state,
+      selection: { kind: 'none' },
+      draft: undefined,
+      dirty: false,
+      errors: [],
+      ...cleared(),
+    };
   }
 
   const draft = createDraft(
