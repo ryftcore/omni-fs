@@ -47,6 +47,19 @@ updates:
         patterns:
           - '@vscode/*'
     ignore:
+      # TypeScript 7 (the native compiler rewrite) is held back deliberately.
+      # typescript-eslint 8.70.0 — the latest — declares
+      # `typescript: ">=4.8.4 <6.1.0"`, so TS 7 would disable type-aware
+      # linting entirely. The repo is on TS 6.0.x, the newest version inside
+      # that supported range. Drop this entry once typescript-eslint ships
+      # TS 7 support.
+      - dependency-name: 'typescript'
+        versions: ['>=7']
+      # @types/node must track the Node version actually targeted (engines.node
+      # is >=22 and CI runs 22). Letting it float to the newest major types the
+      # code against APIs that are absent at runtime.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
       # @types/vscode must not float above the `engines.vscode` floor declared
       # in apps/vscode/package.json, or the extension will compile against APIs
       # that are missing in the oldest VS Code it claims to support.
