@@ -17,6 +17,7 @@ export function ConnectionForm(props: {
   readonly errors: readonly FieldError[];
   readonly showErrors: boolean;
   readonly dirty: boolean;
+  readonly canSave: boolean;
   readonly saving: boolean;
   readonly test: TestState;
   readonly lastError: string | undefined;
@@ -30,6 +31,7 @@ export function ConnectionForm(props: {
   readonly onTest: () => void;
   readonly onRevert: () => void;
   readonly onSave: () => void;
+  readonly onConnect: () => void;
 }): ReactNode {
   const errorFor = (section: DraftSection | 'label', key: string): FieldError | undefined =>
     props.showErrors
@@ -114,8 +116,11 @@ export function ConnectionForm(props: {
         <Button disabled={!props.dirty} onClick={props.onRevert}>
           Revert
         </Button>
-        <Button variant="primary" disabled={props.saving || !props.dirty} onClick={props.onSave}>
+        <Button variant="primary" disabled={props.saving || !props.canSave} onClick={props.onSave}>
           {props.saving ? 'Saving…' : 'Save'}
+        </Button>
+        <Button disabled={props.draft.id === undefined || props.dirty} onClick={props.onConnect}>
+          Connect
         </Button>
       </div>
 

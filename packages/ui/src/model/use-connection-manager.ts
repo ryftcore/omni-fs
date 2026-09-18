@@ -14,6 +14,7 @@ export interface ConnectionManagerController {
   readonly save: () => Promise<void>;
   readonly test: () => Promise<void>;
   readonly remove: () => Promise<void>;
+  readonly connect: () => Promise<void>;
   readonly pickFile: (key: string) => Promise<void>;
 }
 
@@ -29,8 +30,16 @@ export function useConnectionManager(backend: ConnectionsBackend): ConnectionMan
 
     const load = async (initial: boolean): Promise<void> => {
       if (!initial) {
-        const connections = await backend.listConnections();
-        if (!cancelled) dispatch({ type: 'connectionsChanged', connections });
+        const [connections, selection] = await Promise.all([
+          backend.listConnections(),
+          backend.initialSelection(),
+        ]);
+        if (cancelled) return;
+        dispatch({ type: 'connectionsChanged', connections });
+        // A deep link into an already-open panel (e.g. "Edit Connection" on a
+        // tree node): route through the guard rather than assigning the
+        // selection directly, so a pending edit is not silently discarded.
+        if (selection !== undefined) dispatch({ type: 'selectRequested', target: selection });
         return;
       }
 
@@ -98,17 +107,33 @@ export function useConnectionManager(backend: ConnectionsBackend): ConnectionMan
     }
   }, [backend, state]);
 
+  const connect = useCallback(async (): Promise<void> => {
+    const id = state.draft?.id;
+    if (id === undefined) return;
+    try {
+      await backend.connect(id);
+    } catch (error) {
+      // Same shared "operation failed" path as `remove`.
+      dispatch({ type: 'saveFailed', message: messageOf(error) });
+    }
+  }, [backend, state.draft]);
+
   const pickFile = useCallback(
     async (key: string): Promise<void> => {
-      const path = await backend.pickFile();
-      if (path !== undefined) {
-        dispatch({ type: 'fieldChanged', section: 'settings', key, value: path });
+      try {
+        const path = await backend.pickFile();
+        if (path !== undefined) {
+          dispatch({ type: 'fieldChanged', section: 'settings', key, value: path });
+        }
+      } catch (error) {
+        // Same shared "operation failed" path as `remove`.
+        dispatch({ type: 'saveFailed', message: messageOf(error) });
       }
     },
     [backend],
   );
 
-  return { state, dispatch, save, test, remove, pickFile };
+  return { state, dispatch, save, test, remove, connect, pickFile };
 }
 
 function messageOf(error: unknown): string {

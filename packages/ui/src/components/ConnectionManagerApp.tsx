@@ -42,6 +42,7 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
             errors={state.errors}
             showErrors={state.showErrors}
             dirty={state.dirty}
+            canSave={state.canSave}
             saving={state.saving}
             test={state.test}
             lastError={state.lastError}
@@ -57,6 +58,7 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
             onTest={() => void manager.test()}
             onRevert={() => dispatch({ type: 'reverted' })}
             onSave={() => void manager.save()}
+            onConnect={() => void manager.connect()}
           />
         )}
       </div>

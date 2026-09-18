@@ -11,8 +11,6 @@ import type { HostToView, MethodName, ViewToHost } from './protocol.js';
 
 interface VsCodeApi {
   postMessage(message: ViewToHost): void;
-  getState(): unknown;
-  setState(state: unknown): void;
 }
 
 declare function acquireVsCodeApi(): VsCodeApi;

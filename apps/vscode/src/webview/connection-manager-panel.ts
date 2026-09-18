@@ -55,10 +55,11 @@ export class ConnectionManagerPanel {
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
-        // The draft survives hiding via the webview's own setState, and a
-        // `ready` message resyncs everything else, so retaining the whole
-        // context in memory buys nothing.
-        retainContextWhenHidden: false,
+        // Keeps the webview's context alive while hidden, so an in-progress
+        // draft survives switching to another editor tab instead of being
+        // torn down. A genuine reload still resyncs everything else via the
+        // `ready` message.
+        retainContextWhenHidden: true,
         localResourceRoots: [vscode.Uri.joinPath(deps.extensionUri, 'out')],
       },
     );
