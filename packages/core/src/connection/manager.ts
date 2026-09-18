@@ -111,20 +111,26 @@ export class ConnectionManager implements AsyncDisposable {
     signal?: AbortSignal,
   ): Promise<ProbeResult> {
     const started = Date.now();
-    const definition = this.#options.registry.get(target.providerId);
-    const fs = definition.create({
-      config: {
-        id: PROBE_ID,
-        providerId: target.providerId,
-        label: target.label,
-        settings: target.settings,
-        ...(target.rootPath !== undefined ? { rootPath: target.rootPath } : {}),
-      },
-      getSecret: async () => secret,
-      logger: this.#options.logger.child(`probe:${target.providerId}`),
-    });
+    let fs: RemoteFileSystem | undefined;
 
     try {
+      // Both of these can throw synchronously — an unregistered provider id,
+      // or a provider that validates its settings before `connect()` is ever
+      // attempted. They must route through the same failure result as
+      // everything else, not reject the returned promise.
+      const definition = this.#options.registry.get(target.providerId);
+      fs = definition.create({
+        config: {
+          id: PROBE_ID,
+          providerId: target.providerId,
+          label: target.label,
+          settings: target.settings,
+          ...(target.rootPath !== undefined ? { rootPath: target.rootPath } : {}),
+        },
+        getSecret: async () => secret,
+        logger: this.#options.logger.child(`probe:${target.providerId}`),
+      });
+
       await fs.connect(signal);
       // A real round trip. `connect` alone is a no-op for stateless protocols
       // like S3, so it proves nothing about the credentials.
@@ -138,7 +144,7 @@ export class ConnectionManager implements AsyncDisposable {
       };
     } finally {
       try {
-        await fs[Symbol.asyncDispose]();
+        await fs?.[Symbol.asyncDispose]();
       } catch {
         // A teardown failure must not mask the probe result.
       }

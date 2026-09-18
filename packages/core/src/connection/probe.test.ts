@@ -100,6 +100,20 @@ describe('ConnectionManager.probe', () => {
     expect(result.error?.providerId).toBe('stub');
   });
 
+  it('resolves with a failure instead of rejecting when the provider is not registered', async () => {
+    const manager = new ConnectionManager({
+      registry: new ProviderRegistry(),
+      configStore: new InMemoryConfigStore(),
+      secretStore: new InMemorySecretStore(),
+      logger: NOOP_LOGGER,
+    });
+
+    const result = await manager.probe(target, {});
+
+    expect(result.ok).toBe(false);
+    expect(result.error?.code).toBe('NotFound');
+  });
+
   it('disposes the throwaway filesystem on success and on failure', async () => {
     let disposals = 0;
     const ok = managerWith(stubProvider({ onDispose: () => (disposals += 1) }));
