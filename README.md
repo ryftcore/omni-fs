@@ -12,9 +12,10 @@ Browse, edit and transfer remote files without leaving your editor.
 
 ---
 
-> **Status: early development.** The architecture, core and S3 provider are in
-> place. FTP, SFTP and WebDAV are scaffolded but not yet implemented — see
-> [Roadmap](#roadmap).
+> **Status: beta (`v0.1.0-beta.1`).** The architecture, core and S3 provider
+> are in place. FTP, SFTP and WebDAV are scaffolded but not yet implemented —
+> see [Roadmap](#roadmap) and the
+> [extension changelog](apps/vscode/CHANGELOG.md).
 
 ## What it is
 

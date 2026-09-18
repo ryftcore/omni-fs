@@ -66,6 +66,10 @@ jobs:
           generate_release_notes: true
           draft: true # review before it goes out
           fail_on_unmatched_files: true
+          # A tag carrying a semver pre-release suffix (v0.1.0-beta.1) is
+          # marked as a pre-release, so GitHub does not advertise it as the
+          # latest stable download.
+          prerelease: ${{ contains(github.ref_name, '-') }}
 
       # Marketplace publishing is opt-in, so the workflow stays useful for
       # producing a release artifact long before anyone is ready to publish.

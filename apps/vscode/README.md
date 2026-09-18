@@ -5,9 +5,9 @@
 Open a remote file, edit it, press <kbd>Ctrl</kbd>+<kbd>S</kbd>. That's it. No
 download, no re-upload, no separate window.
 
-> **Early development.** The S3 provider is implemented and usable. FTP, SFTP
-> and WebDAV are scaffolded but not yet functional — see
-> [Status](#status) before installing.
+> **Beta (`0.1.0-beta.1`).** The S3 provider is implemented and usable. FTP,
+> SFTP and WebDAV are scaffolded but not yet functional. Read
+> [Status](#status) and the [changelog](CHANGELOG.md) before installing.
 
 ## What it does
 
