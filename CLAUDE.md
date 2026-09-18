@@ -25,9 +25,11 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
-Only `@omni-fs/core` and `@omni-fs/testing` have tests today; the provider
-packages run `vitest --passWithNoTests`. `pnpm test` in `packages/testing` is
-the conformance suite, and is where most behaviour is actually verified.
+Only `@omni-fs/core`, `@omni-fs/testing` and `@omni-fs/ui` have tests today; the
+provider packages run `vitest --passWithNoTests`. `pnpm test` in
+`packages/testing` is the conformance suite, and is where most behaviour is
+actually verified. `packages/ui` runs its tests without jsdom — its state
+machine is a pure reducer, so there is no DOM to simulate.
 
 `pnpm package:vsix` goes through turbo on purpose — the extension bundles the
 workspace packages' `dist/`, so `pnpm --filter omni-fs-vscode package` fails on
@@ -94,6 +96,13 @@ whether a remote file feels native — `FileNotFound` drives create-on-save,
 id anywhere in core, so a new protocol is a new package plus one `register()`
 call per host. `apps/vscode/src/extension.ts` is the composition root and should
 stay one: construct core services, register providers, plug in adapters.
+
+**`@omni-fs/ui`** is the connection manager, shared by both hosts. It depends on
+React and `@omni-fs/core` and nothing else — no widget library, no host APIs.
+Its single seam is the `ConnectionsBackend` port: `apps/vscode` implements it
+over `postMessage`, `apps/desktop` will implement it over IPC, and the
+components above it do not change. Everything crossing that port is plain
+serializable data, because in VS Code it is structured-cloned.
 
 **`RemotePath`** is the one path shape: POSIX, absolute, no trailing slash,
 `.`/`..` resolved, normalised at the provider boundary. VS Code URIs are

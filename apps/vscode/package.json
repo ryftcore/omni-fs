@@ -69,6 +69,12 @@
         "icon": "$(edit)"
       },
       {
+        "command": "omniFs.manageConnections",
+        "title": "Manage Connections",
+        "category": "Omni-FS",
+        "icon": "$(settings-gear)"
+      },
+      {
         "command": "omniFs.removeConnection",
         "title": "Remove Connection",
         "category": "Omni-FS",
@@ -134,6 +140,11 @@
           "command": "omniFs.refresh",
           "when": "view == omniFs.connections",
           "group": "navigation@2"
+        },
+        {
+          "command": "omniFs.manageConnections",
+          "when": "view == omniFs.connections",
+          "group": "navigation@3"
         },
         {
           "command": "omniFs.clearCompletedTransfers",

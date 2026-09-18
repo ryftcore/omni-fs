@@ -76,6 +76,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.window.createTreeView('omniFs.transfers', { treeDataProvider: transfersTree }),
     ...registerCommands({
+      extensionUri: context.extensionUri,
       manager,
       configStore,
       secretStore,
