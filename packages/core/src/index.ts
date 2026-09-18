@@ -42,6 +42,31 @@ export type { ProviderCapabilities } from './capabilities.js';
 export { MINIMAL_CAPABILITIES } from './capabilities.js';
 export { ProviderRegistry } from './registry.js';
 
+// Connection form model, shared by every host's connection editor
+export {
+  clearSecretField,
+  createDraft,
+  isDirty,
+  setField,
+  setLabel,
+  setReadOnly,
+  setRootPath,
+  toConfig,
+  toProviderSummary,
+  toSecretPatch,
+} from './forms/draft.js';
+export { validateDraft, validateField } from './forms/validation.js';
+export { mergeSecret } from './forms/secret-merge.js';
+export type {
+  ConnectionDraft,
+  DraftBaseline,
+  DraftSection,
+  FieldError,
+  ProviderSummary,
+  SecretFieldState,
+  SecretPatchEntry,
+} from './forms/types.js';
+
 // Orchestration
 export { ConnectionManager } from './connection/manager.js';
 export type { ConnectionManagerOptions, ConnectionStateChange } from './connection/manager.js';
