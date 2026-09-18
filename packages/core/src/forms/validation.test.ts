@@ -81,11 +81,12 @@ describe('validateDraft', () => {
 
   it('accepts an unchanged required secret on a saved connection', () => {
     // The value lives in the keychain; the draft only knows it was not touched.
-    let draft = createDraft(
-      provider,
-      { id: 'c1', providerId: 'demo', label: 'prod', settings: { host: 'h' } },
-      ['password'],
-    );
+    let draft = createDraft(provider, {
+      id: 'c1',
+      providerId: 'demo',
+      label: 'prod',
+      settings: { host: 'h' },
+    });
     draft = setField(draft, 'settings', 'mode', 'a');
     expect(validateDraft(draft, provider, ['password'])).toEqual([]);
   });
@@ -101,11 +102,12 @@ describe('validateDraft', () => {
   });
 
   it('requires a secret again once it is explicitly cleared', () => {
-    let draft = createDraft(
-      provider,
-      { id: 'c1', providerId: 'demo', label: 'prod', settings: { host: 'h' } },
-      ['password'],
-    );
+    let draft = createDraft(provider, {
+      id: 'c1',
+      providerId: 'demo',
+      label: 'prod',
+      settings: { host: 'h' },
+    });
     draft = { ...draft, secret: { ...draft.secret, password: { kind: 'cleared' } } };
     expect(validateDraft(draft, provider, ['password'])).toContainEqual({
       section: 'secret',

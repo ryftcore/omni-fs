@@ -1,4 +1,4 @@
-import type { ConnectionConfig, ConnectionId } from '../model/connection.js';
+import type { ConnectionConfig } from '../model/connection.js';
 import type { ProviderDefinition, SettingsField } from '../provider.js';
 import type { ConnectionDraft, DraftSection, ProviderSummary, SecretPatchEntry } from './types.js';
 
@@ -13,15 +13,9 @@ export function toProviderSummary(definition: ProviderDefinition): ProviderSumma
 }
 
 /**
- * Builds a draft. Pass `config` to edit an existing connection, and
- * `secretFieldsPresent` so the form can say "stored" without ever being told
- * what is stored.
+ * Builds a draft. Pass `config` to edit an existing connection.
  */
-export function createDraft(
-  provider: ProviderSummary,
-  config?: ConnectionConfig,
-  secretFieldsPresent: readonly string[] = [],
-): ConnectionDraft {
+export function createDraft(provider: ProviderSummary, config?: ConnectionConfig): ConnectionDraft {
   const settings: Record<string, unknown> = {};
   for (const field of provider.settingsSchema.fields) {
     const stored = config?.settings[field.key];
@@ -37,9 +31,6 @@ export function createDraft(
   for (const field of provider.secretSchema.fields) {
     secret[field.key] = { kind: 'unchanged' };
   }
-  // `secretFieldsPresent` drives the UI's "stored" placeholder; it is read by
-  // the form, not by the draft, so nothing else is needed here.
-  void secretFieldsPresent;
 
   const label = config?.label ?? '';
   const rootPath = config?.rootPath ?? '/';
@@ -108,19 +99,6 @@ export function toSecretPatch(draft: ConnectionDraft): Readonly<Record<string, S
     else if (state.kind === 'cleared') patch[key] = { clear: true };
   }
   return patch;
-}
-
-export function toConfig(draft: ConnectionDraft, id: ConnectionId): ConnectionConfig {
-  return {
-    id,
-    providerId: draft.providerId,
-    label: draft.label.trim(),
-    settings: { ...draft.settings },
-    // `exactOptionalPropertyTypes` means an absent optional must be absent,
-    // not `undefined`, so these are spread in conditionally.
-    ...(draft.rootPath !== '/' ? { rootPath: draft.rootPath } : {}),
-    readOnly: draft.readOnly,
-  };
 }
 
 function defaultValue(field: SettingsField): unknown {

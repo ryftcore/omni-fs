@@ -51,7 +51,6 @@ export {
   setLabel,
   setReadOnly,
   setRootPath,
-  toConfig,
   toProviderSummary,
   toSecretPatch,
 } from './forms/draft.js';

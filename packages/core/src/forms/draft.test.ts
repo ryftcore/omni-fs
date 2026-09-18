@@ -5,7 +5,6 @@ import {
   isDirty,
   setField,
   setLabel,
-  toConfig,
   toSecretPatch,
 } from './draft.js';
 import type { ProviderSummary } from './types.js';
@@ -47,25 +46,23 @@ describe('createDraft', () => {
   });
 
   it('loads an existing config and marks every secret unchanged', () => {
-    const draft = createDraft(
-      provider,
-      {
-        id: 'c1',
-        providerId: 'demo',
-        label: 'prod',
-        settings: { host: 'example.com', port: 2222 },
-        rootPath: '/srv',
-      },
-      ['password'],
-    );
+    const draft = createDraft(provider, {
+      id: 'c1',
+      providerId: 'demo',
+      label: 'prod',
+      settings: { host: 'example.com', port: 2222 },
+      rootPath: '/srv',
+    });
     expect(draft.id).toBe('c1');
     expect(draft.settings['host']).toBe('example.com');
     // A stored value wins over the schema default.
     expect(draft.settings['port']).toBe(2222);
     // A field with no stored value still gets its default.
     expect(draft.settings['secure']).toBe(true);
+    // Every secret field starts unchanged, whatever is actually stored — the
+    // form learns what is stored from `secretFieldsPresent`, passed
+    // separately to `fieldView` and `validateDraft`.
     expect(draft.secret['password']).toEqual({ kind: 'unchanged' });
-    // Not in secretFieldsPresent, so there is nothing stored to keep.
     expect(draft.secret['token']).toEqual({ kind: 'unchanged' });
   });
 });
@@ -130,30 +127,5 @@ describe('toSecretPatch', () => {
       settings: {},
     });
     expect(toSecretPatch(draft)).toEqual({});
-  });
-});
-
-describe('toConfig', () => {
-  it('produces a ConnectionConfig and never leaks a secret into it', () => {
-    let draft = createDraft(provider);
-    draft = setLabel(draft, '  prod  ');
-    draft = setField(draft, 'settings', 'host', 'example.com');
-    draft = setField(draft, 'secret', 'password', 'hunter2');
-
-    const config = toConfig(draft, 'c9');
-    expect(config).toEqual({
-      id: 'c9',
-      providerId: 'demo',
-      label: 'prod',
-      settings: { host: 'example.com', port: 22, secure: true, mode: 'a' },
-      readOnly: false,
-    });
-    expect(JSON.stringify(config)).not.toContain('hunter2');
-  });
-
-  it('includes rootPath only when it is not the default root', () => {
-    const draft = createDraft(provider);
-    expect(toConfig(draft, 'c9').rootPath).toBeUndefined();
-    expect(toConfig({ ...draft, rootPath: '/srv' }, 'c9').rootPath).toBe('/srv');
   });
 });

@@ -80,11 +80,7 @@ describe('fieldView', () => {
   });
 
   it('shows a stored secret as present without revealing it', () => {
-    const draft = createDraft(
-      provider,
-      { id: 'c1', providerId: 'demo', label: 'p', settings: {} },
-      ['password'],
-    );
+    const draft = createDraft(provider, { id: 'c1', providerId: 'demo', label: 'p', settings: {} });
     const view = fieldView(secretField, 'secret', draft, undefined, ['password']);
     expect(view.control).toEqual({
       kind: 'password',
@@ -106,9 +102,7 @@ describe('fieldView', () => {
 
   it('shows a typed secret and stops calling it stored', () => {
     const draft = setField(
-      createDraft(provider, { id: 'c1', providerId: 'demo', label: 'p', settings: {} }, [
-        'password',
-      ]),
+      createDraft(provider, { id: 'c1', providerId: 'demo', label: 'p', settings: {} }),
       'secret',
       'password',
       'typed',
@@ -124,9 +118,7 @@ describe('fieldView', () => {
 
   it('shows an explicitly cleared secret as empty, distinct from never stored', () => {
     const draft = clearSecretField(
-      createDraft(provider, { id: 'c1', providerId: 'demo', label: 'p', settings: {} }, [
-        'password',
-      ]),
+      createDraft(provider, { id: 'c1', providerId: 'demo', label: 'p', settings: {} }),
       'password',
     );
     const view = fieldView(secretField, 'secret', draft, undefined, ['password']);
