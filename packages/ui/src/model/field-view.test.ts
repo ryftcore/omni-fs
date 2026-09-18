@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createDraft, setField } from '@omni-fs/core';
+import { clearSecretField, createDraft, setField } from '@omni-fs/core';
 import type { ProviderSummary } from '@omni-fs/core';
 import { fieldView } from './field-view.js';
 
@@ -117,6 +117,22 @@ describe('fieldView', () => {
     expect(view.control).toEqual({
       kind: 'password',
       value: 'typed',
+      placeholder: 'Not set',
+      stored: false,
+    });
+  });
+
+  it('shows an explicitly cleared secret as empty, distinct from never stored', () => {
+    const draft = clearSecretField(
+      createDraft(provider, { id: 'c1', providerId: 'demo', label: 'p', settings: {} }, [
+        'password',
+      ]),
+      'password',
+    );
+    const view = fieldView(secretField, 'secret', draft, undefined, ['password']);
+    expect(view.control).toEqual({
+      kind: 'password',
+      value: '',
       placeholder: 'Not set',
       stored: false,
     });
