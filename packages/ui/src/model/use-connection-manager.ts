@@ -89,7 +89,13 @@ export function useConnectionManager(backend: ConnectionsBackend): ConnectionMan
   const remove = useCallback(async (): Promise<void> => {
     const connection = selectedConnection(state);
     if (connection === undefined) return;
-    await backend.remove(connection.id);
+    try {
+      await backend.remove(connection.id);
+    } catch (error) {
+      // `saveFailed` is the shared "operation failed" path, not save-specific:
+      // it sets `lastError`, which `ConnectionForm` renders generically.
+      dispatch({ type: 'saveFailed', message: messageOf(error) });
+    }
   }, [backend, state]);
 
   const pickFile = useCallback(
