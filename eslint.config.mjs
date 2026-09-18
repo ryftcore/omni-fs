@@ -36,7 +36,7 @@ export default tseslint.config(
   // the single constraint the whole architecture rests on. See ADR-0001.
   // ---------------------------------------------------------------------------
   {
-    files: ['packages/**/*.ts'],
+    files: ['packages/**/*.ts', 'packages/**/*.tsx'],
     rules: {
       'no-restricted-imports': [
         'error',
@@ -88,6 +88,30 @@ export default tseslint.config(
                 '@omni-fs/core defines contracts only: no host APIs (vscode/electron) and no protocol SDKs. Protocol code belongs in packages/provider-*; host code belongs in apps/*. If core genuinely needs this, express it as a Port instead.',
             },
           ],
+        },
+      ],
+    },
+  },
+
+  // packages/ui renders the connection editor for every host, so it must not
+  // reach a host's transport — not through an import (the block above) and not
+  // through a global. The seam is the ConnectionsBackend port and nothing else.
+  {
+    files: ['packages/ui/**/*.ts', 'packages/ui/**/*.tsx'],
+    rules: {
+      'no-restricted-globals': [
+        'error',
+        {
+          name: 'acquireVsCodeApi',
+          message:
+            'packages/ui must stay transport-agnostic. Implement ConnectionsBackend in apps/vscode instead.',
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "MemberExpression[object.name='window'][property.name='parent']",
+          message: 'packages/ui must stay transport-agnostic. Use the ConnectionsBackend port.',
         },
       ],
     },

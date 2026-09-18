@@ -67,7 +67,7 @@ jobs:
       # this still catches it.
       - name: packages/ must not import a host API
         run: |
-          if grep -rnE "from '(vscode|electron)'" packages/ --include='*.ts'; then
+          if grep -rnE "from '(vscode|electron)'" packages/ --include='*.ts' --include='*.tsx'; then
             echo "::error::packages/ must stay host-agnostic. Move this to apps/, or express it as a Port in @omni-fs/core/ports."
             exit 1
           fi
