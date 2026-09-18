@@ -15,3 +15,5 @@ export {
   selectedProvider,
 } from './model/reducer.js';
 export type { ManagerAction, ManagerState, Selection, TestState } from './model/reducer.js';
+export { fieldView, STORED_SECRET_PLACEHOLDER } from './model/field-view.js';
+export type { FieldControl, FieldView } from './model/field-view.js';
