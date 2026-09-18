@@ -44,6 +44,8 @@ export interface ManagerState {
   /** Errors exist from the first keystroke; they are shown from the first save. */
   readonly showErrors: boolean;
   readonly dirty: boolean;
+  /** Whether Save has anything to do: a real edit, or a draft never saved. */
+  readonly canSave: boolean;
   readonly test: TestState;
   readonly saving: boolean;
   /** A selection change held back by the unsaved-changes guard. */
@@ -91,6 +93,7 @@ export const initialManagerState: ManagerState = {
   errors: [],
   showErrors: false,
   dirty: false,
+  canSave: false,
   test: { kind: 'idle' },
   saving: false,
   pendingSelection: undefined,
@@ -140,9 +143,11 @@ export function managerReducer(state: ManagerState, action: ManagerAction): Mana
       if (source === undefined || provider === undefined) return state;
 
       // No id and no stored credentials: a copy is a new connection, and its
-      // secrets live under a different key.
+      // secrets live under a different key. `source.id` satisfies
+      // ConnectionConfig.id here; `id: undefined` below is what actually
+      // makes the draft new.
       const draft = createDraft(provider, {
-        id: `${source.id}-copy`,
+        id: source.id,
         providerId: source.providerId,
         label: `${source.label} (copy)`,
         settings: source.settings,
@@ -161,7 +166,17 @@ export function managerReducer(state: ManagerState, action: ManagerAction): Mana
       return editDraft(state, (draft) => setLabel(draft, action.value));
 
     case 'fieldChanged':
-      return editDraft(state, (draft) => setField(draft, action.section, action.key, action.value));
+      return editDraft(state, (draft) => {
+        const provider = providerFor(state, draft.providerId);
+        const field = provider?.settingsSchema.fields.find(
+          (candidate) => candidate.key === action.key,
+        );
+        const value =
+          action.section === 'settings' && field?.kind === 'number'
+            ? coerceNumberField(action.value)
+            : action.value;
+        return setField(draft, action.section, action.key, value);
+      });
 
     case 'secretCleared':
       return editDraft(state, (draft) => clearSecretField(draft, action.key));
@@ -212,6 +227,7 @@ export function managerReducer(state: ManagerState, action: ManagerAction): Mana
         ...state,
         draft,
         dirty: false,
+        canSave: false,
         selection: { kind: 'connection', id: action.id },
         ...cleared(),
       };
@@ -250,10 +266,30 @@ function providerFor(state: ManagerState, id: ProviderId | undefined): ProviderS
   return id === undefined ? undefined : state.providers.find((candidate) => candidate.id === id);
 }
 
+/**
+ * A `kind: 'number'` field renders as a text input, so `fieldChanged` always
+ * arrives with a string value. Left uncoerced it would be persisted as
+ * `"2121"` rather than `2121`. An empty string becomes `undefined` so the
+ * required check still fires — `Number('')` is `0`, which would defeat it.
+ * Anything else becomes `Number(value)`; a non-numeric string surfaces as
+ * `NaN`, which `validateField`'s "must be a number" branch already reports.
+ */
+function coerceNumberField(value: unknown): number | undefined {
+  return value === '' ? undefined : Number(value);
+}
+
 /** Rebuilds the draft for a selection and clears everything derived from the old one. */
 function applySelection(state: ManagerState, selection: Selection): ManagerState {
   if (selection.kind === 'none') {
-    return { ...state, selection, draft: undefined, dirty: false, errors: [], ...cleared() };
+    return {
+      ...state,
+      selection,
+      draft: undefined,
+      dirty: false,
+      canSave: false,
+      errors: [],
+      ...cleared(),
+    };
   }
 
   if (selection.kind === 'new') {
@@ -270,33 +306,33 @@ function applySelection(state: ManagerState, selection: Selection): ManagerState
       selection: { kind: 'none' },
       draft: undefined,
       dirty: false,
+      canSave: false,
       errors: [],
       ...cleared(),
     };
   }
 
-  const draft = createDraft(
-    provider,
-    {
-      id: connection.id,
-      providerId: connection.providerId,
-      label: connection.label,
-      settings: connection.settings,
-      ...(connection.rootPath !== undefined ? { rootPath: connection.rootPath } : {}),
-      readOnly: connection.readOnly,
-    },
-    connection.secretFieldsPresent,
-  );
+  const draft = createDraft(provider, {
+    id: connection.id,
+    providerId: connection.providerId,
+    label: connection.label,
+    settings: connection.settings,
+    ...(connection.rootPath !== undefined ? { rootPath: connection.rootPath } : {}),
+    readOnly: connection.readOnly,
+  });
 
   return withDraft({ ...state, selection }, draft, connection.secretFieldsPresent);
 }
 
 /**
- * A draft that has never been saved counts as dirty: there is nothing to
- * compare it against, and Save has to be reachable for a new connection.
+ * Save has to be reachable for a draft that has never been saved — there is
+ * nothing to compare it against — even though it is not `dirty`. `dirty`
+ * itself must mean an actual edit: it also drives the unsaved-changes guard
+ * and Revert, and a brand-new, untouched draft has no changes to guard or
+ * revert.
  */
-function dirtyFor(draft: ConnectionDraft): boolean {
-  return draft.id === undefined || isDirty(draft);
+function canSaveFor(draft: ConnectionDraft, dirty: boolean): boolean {
+  return draft.id === undefined || dirty;
 }
 
 function editDraft(
@@ -308,10 +344,12 @@ function editDraft(
   const provider = providerFor(state, draft.providerId);
   if (provider === undefined) return state;
 
+  const dirty = isDirty(draft);
   return {
     ...state,
     draft,
-    dirty: dirtyFor(draft),
+    dirty,
+    canSave: canSaveFor(draft, dirty),
     errors: validateDraft(draft, provider, secretFieldsFor(state)),
     // A result that described the previous values is worse than no result.
     test: { kind: 'idle' },
@@ -324,10 +362,12 @@ function withDraft(
   secretFieldsPresent: readonly string[],
 ): ManagerState {
   const provider = providerFor(state, draft.providerId);
+  const dirty = isDirty(draft);
   return {
     ...state,
     draft,
-    dirty: dirtyFor(draft),
+    dirty,
+    canSave: canSaveFor(draft, dirty),
     errors: provider === undefined ? [] : validateDraft(draft, provider, secretFieldsPresent),
     ...cleared(),
   };

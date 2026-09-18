@@ -7,7 +7,12 @@ import type { ProviderSummary } from '@omni-fs/core';
 const provider: ProviderSummary = {
   id: 'demo',
   displayName: 'Demo',
-  settingsSchema: { fields: [{ kind: 'text', key: 'host', label: 'Host', required: true }] },
+  settingsSchema: {
+    fields: [
+      { kind: 'text', key: 'host', label: 'Host', required: true },
+      { kind: 'number', key: 'port', label: 'Port', required: true },
+    ],
+  },
   secretSchema: {
     fields: [{ kind: 'password', key: 'password', label: 'Password', required: true }],
   },
@@ -17,7 +22,7 @@ const prod: ConnectionSummary = {
   id: 'c1',
   providerId: 'demo',
   label: 'prod',
-  settings: { host: 'example.com' },
+  settings: { host: 'example.com', port: 21 },
   rootPath: undefined,
   readOnly: false,
   secretFieldsPresent: ['password'],
@@ -131,6 +136,50 @@ describe('managerReducer: editing', () => {
   });
 });
 
+describe('managerReducer: number fields', () => {
+  it('coerces a typed value to a number rather than storing the raw string', () => {
+    const edited = managerReducer(loaded, {
+      type: 'fieldChanged',
+      section: 'settings',
+      key: 'port',
+      value: '2121',
+    });
+    expect(edited.draft?.settings['port']).toBe(2121);
+  });
+
+  it('clears an emptied number field to undefined and reports it required', () => {
+    // `Number('')` is `0`, which would satisfy the required check and defeat
+    // it — clearing the field must produce `undefined`, not `0`.
+    const cleared = managerReducer(loaded, {
+      type: 'fieldChanged',
+      section: 'settings',
+      key: 'port',
+      value: '',
+    });
+    expect(cleared.draft?.settings['port']).toBeUndefined();
+    expect(cleared.errors).toContainEqual({
+      section: 'settings',
+      key: 'port',
+      message: 'Port is required',
+    });
+  });
+
+  it('leaves a non-numeric value as NaN so it is reported as invalid', () => {
+    const invalid = managerReducer(loaded, {
+      type: 'fieldChanged',
+      section: 'settings',
+      key: 'port',
+      value: 'abc',
+    });
+    expect(invalid.draft?.settings['port']).toBeNaN();
+    expect(invalid.errors).toContainEqual({
+      section: 'settings',
+      key: 'port',
+      message: 'Port must be a number',
+    });
+  });
+});
+
 describe('managerReducer: the unsaved-changes guard', () => {
   it('switches immediately when the draft is clean', () => {
     const next = managerReducer(loaded, {
@@ -223,8 +272,27 @@ describe('managerReducer: new and duplicate', () => {
     expect(fresh.selection).toEqual({ kind: 'new', providerId: 'demo' });
     expect(fresh.draft?.id).toBeUndefined();
     expect(fresh.draft?.label).toBe('');
-    // Never saved, so nothing to compare against: Save must be reachable.
-    expect(fresh.dirty).toBe(true);
+    // Untouched, so not dirty — dirty drives the unsaved-changes guard and
+    // Revert, neither of which applies to a blank form.
+    expect(fresh.dirty).toBe(false);
+    // Never saved, so nothing to compare against: Save must still be reachable.
+    expect(fresh.canSave).toBe(true);
+  });
+
+  it('switches provider on a fresh, untouched draft without the unsaved-changes guard', () => {
+    // The regression this guards: "Add Connection" opens on the first
+    // provider, then "+ SFTP" used to be treated as discarding changes the
+    // user never made.
+    const fresh = managerReducer(loaded, {
+      type: 'selectRequested',
+      target: { kind: 'new', providerId: 'demo' },
+    });
+    const switched = managerReducer(fresh, {
+      type: 'selectRequested',
+      target: { kind: 'connection', id: 'c2' },
+    });
+    expect(switched.selection).toEqual({ kind: 'connection', id: 'c2' });
+    expect(switched.pendingSelection).toBeUndefined();
   });
 
   it('duplicates settings but never credentials', () => {
@@ -239,8 +307,12 @@ describe('managerReducer: new and duplicate', () => {
       key: 'password',
       message: 'Password is required',
     });
-    // Never saved, so nothing to compare against: Save must be reachable.
-    expect(copy.dirty).toBe(true);
+    // Untouched relative to its own baseline, so not dirty...
+    expect(copy.dirty).toBe(false);
+    // ...but never saved, so nothing to compare against: Save must still be
+    // reachable, and clicking "+ SFTP" right after must not pop a discard
+    // prompt for changes the user never made.
+    expect(copy.canSave).toBe(true);
   });
 });
 
