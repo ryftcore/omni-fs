@@ -1,8 +1,16 @@
 import { Emitter } from '../util/events.js';
 import { OmniFsError } from '../errors.js';
+import { RemotePath } from '../model/path.js';
 import type { ConfigStore } from '../ports/config-store.js';
-import type { ConnectionConfig, ConnectionId, ConnectionState } from '../model/connection.js';
+import type {
+  ConnectionConfig,
+  ConnectionId,
+  ConnectionSecret,
+  ConnectionState,
+} from '../model/connection.js';
 import type { Logger } from '../ports/logger.js';
+import type { ProviderCapabilities } from '../capabilities.js';
+import type { ProviderId } from '../model/connection.js';
 import type { ProviderRegistry } from '../registry.js';
 import type { RemoteFileSystem } from '../provider.js';
 import type { SecretStore } from '../ports/secret-store.js';
@@ -20,6 +28,24 @@ export interface ConnectionManagerOptions {
   /** Drop an idle connection after this long. `0` disables. Default 5 min. */
   readonly idleTimeoutMs?: number;
 }
+
+/** A connection being tested. No id: it may never have been saved. */
+export interface ProbeTarget {
+  readonly providerId: ProviderId;
+  readonly label: string;
+  readonly settings: Readonly<Record<string, unknown>>;
+  readonly rootPath?: string | undefined;
+}
+
+export interface ProbeResult {
+  readonly ok: boolean;
+  readonly capabilities?: ProviderCapabilities | undefined;
+  readonly error?: OmniFsError | undefined;
+  readonly durationMs: number;
+}
+
+/** Id given to a throwaway probe filesystem. Never stored, never looked up. */
+const PROBE_ID = '__probe__';
 
 /**
  * Owns the lifecycle of live `RemoteFileSystem` instances: lazy connect,
@@ -68,6 +94,54 @@ export class ConnectionManager implements AsyncDisposable {
       return await attempt;
     } finally {
       this.#connecting.delete(id);
+    }
+  }
+
+  /**
+   * Connects a draft without saving anything, then throws the connection away.
+   *
+   * Deliberately bypasses `#live`, `#states`, `#connecting` and `#idleTimers`:
+   * a draft is not a connection, and a failing test must not paint an existing
+   * connection's state red. Returns failure rather than throwing, because "it
+   * did not work" is the expected outcome of a test, not an exception.
+   */
+  async probe(
+    target: ProbeTarget,
+    secret: ConnectionSecret,
+    signal?: AbortSignal,
+  ): Promise<ProbeResult> {
+    const started = Date.now();
+    const definition = this.#options.registry.get(target.providerId);
+    const fs = definition.create({
+      config: {
+        id: PROBE_ID,
+        providerId: target.providerId,
+        label: target.label,
+        settings: target.settings,
+        ...(target.rootPath !== undefined ? { rootPath: target.rootPath } : {}),
+      },
+      getSecret: async () => secret,
+      logger: this.#options.logger.child(`probe:${target.providerId}`),
+    });
+
+    try {
+      await fs.connect(signal);
+      // A real round trip. `connect` alone is a no-op for stateless protocols
+      // like S3, so it proves nothing about the credentials.
+      await fs.stat(RemotePath.parse(target.rootPath ?? '/'), signal);
+      return { ok: true, capabilities: fs.capabilities, durationMs: Date.now() - started };
+    } catch (error) {
+      return {
+        ok: false,
+        error: OmniFsError.wrap(error, { providerId: target.providerId }),
+        durationMs: Date.now() - started,
+      };
+    } finally {
+      try {
+        await fs[Symbol.asyncDispose]();
+      } catch {
+        // A teardown failure must not mask the probe result.
+      }
     }
   }
 

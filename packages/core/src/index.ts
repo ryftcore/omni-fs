@@ -69,7 +69,12 @@ export type {
 
 // Orchestration
 export { ConnectionManager } from './connection/manager.js';
-export type { ConnectionManagerOptions, ConnectionStateChange } from './connection/manager.js';
+export type {
+  ConnectionManagerOptions,
+  ConnectionStateChange,
+  ProbeResult,
+  ProbeTarget,
+} from './connection/manager.js';
 export { ManagedFileSystem } from './fs/managed-file-system.js';
 export type { ManagedFileSystemOptions } from './fs/managed-file-system.js';
 export { EntryCache } from './cache/entry-cache.js';
