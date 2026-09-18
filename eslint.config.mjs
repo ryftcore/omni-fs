@@ -3,6 +3,7 @@
 // package.json is intentionally not "type": "module".
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
+import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
   { ignores: ['**/dist/**', '**/out/**', '**/node_modules/**', '**/.turbo/**', '**/coverage/**'] },
@@ -96,9 +97,18 @@ export default tseslint.config(
   // packages/ui renders the connection editor for every host, so it must not
   // reach a host's transport — not through an import (the block above) and not
   // through a global. The seam is the ConnectionsBackend port and nothing else.
+  //
+  // It also gets the react-hooks rules. `use-connection-manager.ts` has
+  // hand-written effect cleanup, several `useCallback` dependency arrays and a
+  // `cancelled` guard, with no jsdom and no component tests by design
+  // (packages/ui is tested through its pure reducer and fieldView instead) —
+  // `exhaustive-deps` is the only automated coverage that code gets.
   {
     files: ['packages/ui/**/*.ts', 'packages/ui/**/*.tsx'],
+    plugins: { 'react-hooks': reactHooks },
     rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'error',
       'no-restricted-globals': [
         'error',
         {

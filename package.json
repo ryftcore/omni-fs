@@ -26,6 +26,7 @@
     "@types/node": "^22.8.0",
     "eslint": "^10.10.0",
     "eslint-plugin-import-x": "^4.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
     "prettier": "^3.3.3",
     "turbo": "^2.2.0",
     "typescript": "^6.0.3",
