@@ -2,7 +2,15 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "compilerOptions": {
     "target": "ES2023",
-    "lib": ["ES2023"],
+    // ESNext.Disposable supplies Disposable/AsyncDisposable and the
+    // Symbol.dispose / Symbol.asyncDispose declarations that the resource
+    // lifecycle in core relies on. TypeScript 6 stopped picking these up
+    // incidentally from @types/node, so name the lib explicitly.
+    "lib": ["ES2023", "ESNext.Disposable"],
+    // Likewise explicit: TypeScript 6 no longer auto-includes every @types
+    // package it can find. Stating the dependency here means the build does
+    // not change behaviour based on what happens to be in node_modules.
+    "types": ["node"],
     "module": "Node16",
     "moduleResolution": "Node16",
 
