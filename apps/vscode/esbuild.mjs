@@ -13,23 +13,43 @@ import { build, context } from 'esbuild';
 const watch = process.argv.includes('--watch');
 const production = process.argv.includes('--production');
 
-/** @type {import('esbuild').BuildOptions} */
-const options = {
-  entryPoints: ['src/extension.ts'],
+const shared = {
   bundle: true,
-  outfile: 'out/extension.js',
-  platform: 'node',
-  format: 'cjs',
-  target: 'node22',
-  external: ['vscode'],
   sourcemap: !production,
   minify: production,
   logLevel: 'info',
 };
 
+/** The extension host: CommonJS, Node, `vscode` provided at runtime. */
+/** @type {import('esbuild').BuildOptions} */
+const extension = {
+  ...shared,
+  entryPoints: ['src/extension.ts'],
+  outfile: 'out/extension.js',
+  platform: 'node',
+  format: 'cjs',
+  target: 'node22',
+  external: ['vscode'],
+};
+
+/**
+ * The webview: a browser context with no Node and no `vscode` module. The CSS
+ * imported by the entry point is emitted alongside as out/webview.css.
+ */
+/** @type {import('esbuild').BuildOptions} */
+const webview = {
+  ...shared,
+  entryPoints: ['src/webview/index.tsx'],
+  outfile: 'out/webview.js',
+  platform: 'browser',
+  format: 'esm',
+  target: 'es2022',
+  jsx: 'automatic',
+};
+
 if (watch) {
-  const ctx = await context(options);
-  await ctx.watch();
+  const contexts = await Promise.all([context(extension), context(webview)]);
+  await Promise.all(contexts.map((ctx) => ctx.watch()));
 } else {
-  await build(options);
+  await Promise.all([build(extension), build(webview)]);
 }

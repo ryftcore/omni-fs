@@ -1,0 +1,27 @@
+/*
+ * Remaps @omni-fs/ui's tokens onto VS Code's theme variables, so the panel
+ * follows the user's colour theme. apps/desktop writes its own sibling of this
+ * file and no component changes.
+ */
+:root {
+  --omni-font: var(--vscode-font-family);
+  --omni-font-size: var(--vscode-font-size);
+  --omni-fg: var(--vscode-foreground);
+  --omni-fg-muted: var(--vscode-descriptionForeground);
+  --omni-bg: var(--vscode-editor-background);
+  --omni-bg-raised: var(--vscode-button-secondaryBackground);
+  --omni-border: var(--vscode-panel-border);
+  --omni-input-bg: var(--vscode-input-background);
+  --omni-input-fg: var(--vscode-input-foreground);
+  --omni-accent: var(--vscode-button-background);
+  --omni-accent-fg: var(--vscode-button-foreground);
+  --omni-error: var(--vscode-errorForeground);
+  --omni-success: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
+  --omni-focus: var(--vscode-focusBorder);
+  --omni-selection-bg: var(--vscode-list-activeSelectionBackground);
+}
+
+body {
+  margin: 0;
+  padding: 0;
+}

@@ -240,11 +240,16 @@
     "@omni-fs/provider-ftp": "workspace:*",
     "@omni-fs/provider-s3": "workspace:*",
     "@omni-fs/provider-sftp": "workspace:*",
-    "@omni-fs/provider-webdav": "workspace:*"
+    "@omni-fs/provider-webdav": "workspace:*",
+    "@omni-fs/ui": "workspace:*",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/node": "^22.8.0",
     "@types/vscode": "^1.90.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
     "typescript": "^6.0.3",
     "esbuild": "^0.28.2",
     "@vscode/vsce": "^4.0.0"

@@ -12,7 +12,9 @@
     "incremental": false,
     "declaration": false,
     "declarationMap": false,
+    "jsx": "react-jsx",
+    "lib": ["ES2023", "ESNext.Disposable", "DOM", "DOM.Iterable"],
     "types": ["node", "vscode"]
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
 }
