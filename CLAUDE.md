@@ -15,6 +15,9 @@ pnpm format:check   # CI enforces this
 pnpm package:vsix   # -> apps/vscode/*.vsix
 ```
 
+CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, plus
+`format:check` and the commit-title check in a separate workflow.
+
 Single test:
 
 ```bash
@@ -22,19 +25,30 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
+Only `@omni-fs/core` and `@omni-fs/testing` have tests today; the provider
+packages run `vitest --passWithNoTests`. `pnpm test` in `packages/testing` is
+the conformance suite, and is where most behaviour is actually verified.
+
 `pnpm package:vsix` goes through turbo on purpose — the extension bundles the
 workspace packages' `dist/`, so `pnpm --filter omni-fs-vscode package` fails on
 a clean checkout. Press <kbd>F5</kbd> in VS Code for a dev extension host.
+
+`packages/*` build with `tsc -b` (composite projects); `apps/vscode` builds with
+esbuild and type checks separately (`tsc -p tsconfig.json --noEmit`). So after
+changing core, run `pnpm build` before the extension's typecheck means anything
+— it resolves `@omni-fs/core` through `dist/`, not source.
 
 ## The rule everything depends on
 
 **Nothing in `packages/` may import `vscode` or `electron`. Nothing in
 `packages/core` may import a protocol SDK.**
 
-MVP 1 is the VS Code extension; MVP 2 is a desktop app (Electron, not started)
-that must reuse the entire protocol layer rather than reimplement it. That is
-only possible if the boundary holds, so it is enforced by ESLint
-(`eslint.config.mjs`) and re-checked by a grep job in CI — not by convention.
+MVP 1 is the VS Code extension; MVP 2 is a desktop app (Electron, not started —
+`apps/desktop` is a README describing its intended shape) that must reuse the
+entire protocol layer rather than reimplement it. That is only possible if the
+boundary holds, so it is enforced by ESLint (`eslint.config.mjs`, with
+`no-restricted-imports` messages that say where the code belongs) and re-checked
+by a grep job in CI — not by convention.
 
 When core needs something only a host can do, add a **Port** under
 `packages/core/src/ports/` and implement it per host. There are three:
@@ -52,6 +66,10 @@ else. Each must: throw only `OmniFsError` (translate native errors in its own
 `AbortSignal` on anything touching the network. `provider-s3` is the reference
 implementation — it is the hardest case because S3 has no directories.
 
+Optional methods on `RemoteFileSystem` (`createDirectory`, `rename`, `copy`,
+`createWriteStream`, `watch`) exist only when the matching capability is true.
+Do not implement one and declare the capability false, or vice versa.
+
 **`ProviderCapabilities`** is how protocols are allowed to differ honestly.
 Callers check it instead of calling and interpreting a failure; the UI greys
 out actions in advance, and `TransferQueue` reads `maxConcurrency` so FTP's
@@ -67,12 +85,19 @@ extension.
 
 **`OmniFsError`** is the single error vocabulary. Providers translate inward
 once; hosts translate outward once (`toVsCodeError` in
-`apps/vscode/src/fs/omni-file-system-provider.ts`). `retryable` is the only
-thing `TransferQueue` consults when deciding to retry.
+`apps/vscode/src/fs/omni-file-system-provider.ts`, where the mapping decides
+whether a remote file feels native — `FileNotFound` drives create-on-save,
+`NoPermissions` a read-only editor). `retryable` is the only thing
+`TransferQueue` consults when deciding to retry.
 
 **`ProviderRegistry`** is the extension point. There is no `switch` on provider
 id anywhere in core, so a new protocol is a new package plus one `register()`
-call per host.
+call per host. `apps/vscode/src/extension.ts` is the composition root and should
+stay one: construct core services, register providers, plug in adapters.
+
+**`RemotePath`** is the one path shape: POSIX, absolute, no trailing slash,
+`.`/`..` resolved, normalised at the provider boundary. VS Code URIs are
+`omnifs://<connectionId>/<path>` — authority is the connection id.
 
 `ConnectionConfig` and `ConnectionSecret` are separate types deliberately:
 config is committable (it lives in the `omniFs.connections` setting so teams
@@ -104,8 +129,8 @@ catches a test that assumes real directories exist.
 
 - **Commits are a single title line**: `:emoji: <type> <description>`, no body.
   Never add `Co-Authored-By`, `Generated with Claude Code`, or any session
-  attribution — this repo is being open-sourced. CI enforces the format
-  (bot-authored PRs exempt).
+  attribution — this repo is being open-sourced. CI enforces both the title
+  pattern and the empty body (bot-authored PRs exempt).
 - **TypeScript is held at 6.0.x.** typescript-eslint 8.70 declares
   `typescript: ">=4.8.4 <6.1.0"`; TS 7 would silently disable type-aware
   linting, including the boundary rule. Dependabot ignores `typescript >=7`.
@@ -113,7 +138,14 @@ catches a test that assumes real directories exist.
   compile against APIs missing at runtime. Same for `@types/vscode` vs
   `engines.vscode`.
 - `tsconfig.base.json` names `lib`/`types` explicitly because TS 6 stopped
-  auto-including `@types` packages.
+  auto-including `@types` packages. Strictness is high:
+  `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,
+  `verbatimModuleSyntax` — hence the `| undefined` on optional properties
+  throughout core.
+- `.npmrc` sets `hoist=false`: a package may only import what its own
+  `package.json` declares.
+- The packaging job fails if the `.vsix` exceeds 2 MB — usually a
+  `.vscodeignore` miss rather than a real size problem.
 - GitHub Actions are pinned to commit SHAs. CodeQL, Dependency Review and
   Scorecard are gated on repo visibility — they skip while the repo is private
   and activate on going public.
