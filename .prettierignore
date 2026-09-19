@@ -3,4 +3,5 @@ dist
 out
 coverage
 .turbo
+.superpowers
 pnpm-lock.yaml
