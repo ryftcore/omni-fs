@@ -18,8 +18,8 @@ import { WEBDAV_SECRET_SCHEMA, WEBDAV_SETTINGS_SCHEMA } from './settings.js';
  *
  * The one protocol of the four with a native server-side copy (`COPY`) *and*
  * real directories (`MKCOL`), so it needs almost no emulation. It has no
- * ranged-write support, and ETags are real, which makes it the best protocol
- * for exercising the `ifMatch` conflict-detection path.
+ * ranged-write support. ETag support is server-dependent — see the
+ * `hasVersionTokens` comment below.
  */
 export { WEBDAV_SECRET_SCHEMA, WEBDAV_SETTINGS_SCHEMA } from './settings.js';
 
@@ -35,7 +35,14 @@ export const WEBDAV_CAPABILITIES: ProviderCapabilities = {
   canWatch: false,
   hasRealDirectories: true,
   preservesMTime: false,
-  hasVersionTokens: true,
+  // Measured against dgraziotin/nginx-webdav-nononsense: an `ETag` header is
+  // present on GET/HEAD, but PROPFIND bodies never include a `getetag`
+  // property. The `webdav` client derives both `stat()` and `list()` from
+  // PROPFIND, so neither can produce a version token against this server —
+  // declared false so the conformance suite skips the `ifMatch` path rather
+  // than failing it. Real Nextcloud and sabredav do return `getetag`; see
+  // task-4-report.md.
+  hasVersionTokens: false,
   maxConcurrency: 6,
   listIsPaginated: false,
 };
