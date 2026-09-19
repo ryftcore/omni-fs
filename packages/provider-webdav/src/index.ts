@@ -9,9 +9,9 @@ import type {
   ReadOptions,
   RemoteFileSystem,
   RemotePath,
-  SettingsSchema,
   WriteOptions,
 } from '@omni-fs/core';
+import { WEBDAV_SECRET_SCHEMA, WEBDAV_SETTINGS_SCHEMA } from './settings.js';
 
 /**
  * WebDAV, including Nextcloud and ownCloud.
@@ -21,44 +21,7 @@ import type {
  * ranged-write support, and ETags are real, which makes it the best protocol
  * for exercising the `ifMatch` conflict-detection path.
  */
-export const WEBDAV_SETTINGS_SCHEMA: SettingsSchema = {
-  fields: [
-    {
-      kind: 'text',
-      key: 'baseUrl',
-      label: 'Server URL',
-      required: true,
-      placeholder: 'https://cloud.example.com/remote.php/dav/files/alice',
-    },
-    {
-      kind: 'select',
-      key: 'authType',
-      label: 'Authentication',
-      required: true,
-      default: 'password',
-      options: [
-        { value: 'password', label: 'Username and password' },
-        { value: 'token', label: 'Bearer token' },
-        { value: 'none', label: 'None (public share)' },
-      ],
-    },
-    { kind: 'text', key: 'username', label: 'Username' },
-    {
-      kind: 'text',
-      key: 'rootPrefix',
-      label: 'Root prefix',
-      placeholder: 'Documents',
-      help: 'Optional. Scopes the connection to a subfolder of the server URL.',
-    },
-  ],
-};
-
-export const WEBDAV_SECRET_SCHEMA: SettingsSchema = {
-  fields: [
-    { kind: 'password', key: 'password', label: 'Password / app password' },
-    { kind: 'password', key: 'token', label: 'Bearer token' },
-  ],
-};
+export { WEBDAV_SECRET_SCHEMA, WEBDAV_SETTINGS_SCHEMA } from './settings.js';
 
 export const WEBDAV_CAPABILITIES: ProviderCapabilities = {
   canWrite: true,
