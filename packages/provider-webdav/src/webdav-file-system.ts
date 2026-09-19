@@ -1,6 +1,13 @@
-import { Readable } from 'node:stream';
-import { AuthType, createClient, type FileStat as DavStat, type WebDAVClient } from 'webdav';
-import { OmniFsError, collectStream } from '@omni-fs/core';
+import { Readable, Writable } from 'node:stream';
+import {
+  AuthType,
+  createClient,
+  type CreateWriteStreamOptions,
+  type FileStat as DavStat,
+  type PutFileContentsOptions,
+  type WebDAVClient,
+} from 'webdav';
+import { OmniFsError, collectStream, streamFrom } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -102,11 +109,6 @@ export class WebdavFileSystem implements RemoteFileSystem {
     }
   }
 
-  // Tasks 7-8 replace the two members below with real implementations. They
-  // exist because `writeFile` and `delete` are non-optional on
-  // `RemoteFileSystem`, so the class does not satisfy the contract without
-  // them.
-
   async readFile(path: RemotePath, options?: ReadOptions): Promise<Uint8Array> {
     try {
       return await collectStream(await this.createReadStream(path, options));
@@ -119,8 +121,22 @@ export class WebdavFileSystem implements RemoteFileSystem {
     path: RemotePath,
     options?: ReadOptions,
   ): Promise<ReadableStream<Uint8Array>> {
+    const client = this.#requireClient();
     const range = buildRange(options);
-    const stream = this.#requireClient().createReadStream(this.#remote(path), {
+    // A read of zero bytes has no `Range` spelling, so it is answered here
+    // rather than sent as something the server would read as a different
+    // request. See `buildRange`. The `stat` is not a formality: without it a
+    // zero-length read of a missing path, or one through an already-aborted
+    // signal, would succeed emptily, where MemoryFileSystem — the contract's
+    // reference — raises NotFound and Cancelled before it slices anything.
+    // Only the bytes are short-circuited, never the question of whether the
+    // read was allowed to happen at all.
+    if (range === 'empty') {
+      await this.stat(path, options?.signal);
+      return streamFrom(new Uint8Array(0));
+    }
+
+    const stream = client.createReadStream(this.#remote(path), {
       ...(range !== undefined ? { range } : {}),
       ...(options?.signal !== undefined ? { signal: options.signal } : {}),
     });
@@ -135,12 +151,85 @@ export class WebdavFileSystem implements RemoteFileSystem {
     return translateReadStream(web, path.value);
   }
 
-  async writeFile(_path: RemotePath, _data: Uint8Array, _options?: WriteOptions): Promise<void> {
-    throw OmniFsError.unsupported('writeFile', 'webdav');
+  async writeFile(path: RemotePath, data: Uint8Array, options?: WriteOptions): Promise<void> {
+    if (options?.overwrite === false && (await this.#exists(path, options.signal))) {
+      throw OmniFsError.alreadyExists(path.value);
+    }
+
+    await this.#run(
+      (client) =>
+        putWithParents(
+          client,
+          { remote: this.#remote(path), path: path.value },
+          Buffer.from(data),
+          {
+            overwrite: options?.overwrite !== false,
+            contentLength: data.byteLength,
+            ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+          },
+          options?.createParents !== false,
+        ),
+      path.value,
+    );
+
+    options?.onProgress?.(data.byteLength, data.byteLength);
   }
+
+  /**
+   * A streamed PUT, for a file too large to hold in memory.
+   *
+   * Two `WriteOptions` do not apply on this path. `createParents` cannot:
+   * the body is already on the wire by the time a 409 comes back, and there is
+   * nothing left to resend, so a caller who needs it on a server that does not
+   * create the chain itself should `createDirectory` first — which is why the
+   * failure is reported as `Conflict` rather than swallowed. `onProgress` is
+   * not reported either: the caller is the one feeding the stream, so it
+   * already knows how many bytes it has written, and the library exposes no
+   * upload progress on this call.
+   */
+  async createWriteStream(
+    path: RemotePath,
+    options?: WriteOptions,
+  ): Promise<WritableStream<Uint8Array>> {
+    const client = this.#requireClient();
+    // `overwrite: false` puts `If-None-Match: *` on the request, but a server
+    // is free to ignore it — the dev image does — so the guard is what
+    // actually makes the option mean something.
+    if (options?.overwrite === false && (await this.#exists(path, options.signal))) {
+      throw OmniFsError.alreadyExists(path.value);
+    }
+
+    return openWriteStream(
+      client,
+      { remote: this.#remote(path), path: path.value },
+      {
+        overwrite: options?.overwrite !== false,
+        ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      },
+    );
+  }
+
+  // Task 8 replaces the member below with a real implementation. It exists
+  // because `delete` is non-optional on `RemoteFileSystem`, so the class does
+  // not satisfy the contract without it.
 
   async delete(_path: RemotePath, _options?: DeleteOptions): Promise<void> {
     throw OmniFsError.unsupported('delete', 'webdav');
+  }
+
+  /**
+   * Check-then-write, which is racy by nature — WebDAV's atomic answer is
+   * `If-None-Match: *`, and this server ignores it. Being racy is still far
+   * better than not honouring `overwrite: false` at all.
+   */
+  async #exists(path: RemotePath, signal?: AbortSignal): Promise<boolean> {
+    try {
+      await this.stat(path, signal);
+      return true;
+    } catch (error) {
+      if (OmniFsError.is(error) && error.code === 'NotFound') return false;
+      throw error;
+    }
   }
 
   #remote(path: RemotePath): string {
@@ -171,9 +260,10 @@ export class WebdavFileSystem implements RemoteFileSystem {
   }
 }
 
-// The three functions below are pure and are exported so the hermetic suite can
-// reach them without a server. They are deliberately not re-exported from
-// index.ts: they are this package's internals, not its public API.
+// The functions below are exported so the hermetic suite can reach them
+// without a server — the ones that do talk to a server take the client as an
+// argument, so a fake stands in for it. They are deliberately not re-exported
+// from index.ts: they are this package's internals, not its public API.
 
 /**
  * Applies the connection's root prefix, so a connection can be scoped to a
@@ -204,13 +294,92 @@ export function collectionPath(value: string): string {
   return trimmed === '' ? '/' : trimmed;
 }
 
-/** Translates `ReadOptions` into the `webdav` client's inclusive byte range. */
+/**
+ * Translates `ReadOptions` into the `webdav` client's inclusive byte range.
+ *
+ * `'empty'` means the caller asked for no bytes at all. The inclusive
+ * arithmetic would turn `{ offset: 5, length: 0 }` into `bytes=5-4`, an
+ * inverted range a server answers with 416 or, worse, ignores — sending the
+ * whole file back for a request that wanted nothing. There is no Range header
+ * for zero bytes, so the read is answered without one.
+ */
 export function buildRange(
   options: ReadOptions | undefined,
-): { start: number; end?: number } | undefined {
+): { start: number; end?: number } | 'empty' | undefined {
   if (options?.offset === undefined) return undefined;
   const start = options.offset;
-  return options.length === undefined ? { start } : { start, end: start + options.length - 1 };
+  if (options.length === undefined) return { start };
+  return options.length <= 0 ? 'empty' : { start, end: start + options.length - 1 };
+}
+
+/** The collection a resource lives in, or nothing when that is the root. */
+export function parentCollection(remote: string): string | undefined {
+  const trimmed = remote.replace(/\/+$/, '');
+  const cut = trimmed.lastIndexOf('/');
+  return cut <= 0 ? undefined : trimmed.slice(0, cut);
+}
+
+/** The slice of the client `putWithParents` drives. */
+export type PutClient = Pick<WebDAVClient, 'putFileContents' | 'createDirectory'>;
+
+/**
+ * PUT, creating the parent collection if that is what was missing.
+ *
+ * `WriteOptions.createParents` defaults to true, and a standards-compliant
+ * server (Nextcloud, sabredav) answers 409 Conflict for a PUT into a
+ * collection that does not exist. The dev image does not — it runs with
+ * `create_full_put_path on` and builds the chain itself — so repairing on the
+ * conflict rather than MKCOL-ing ahead of every write costs nothing on the
+ * servers that need no repair, and is correct on the ones that do.
+ *
+ * Exactly one retry: a second conflict is not a missing parent.
+ *
+ * `target` carries both paths because they differ under a `rootPrefix`:
+ * `remote` is what the request is sent to, `path` is what an error names, so
+ * a caller is told about the path it asked for.
+ */
+export async function putWithParents(
+  client: PutClient,
+  target: { readonly remote: string; readonly path: string },
+  data: Buffer,
+  options: PutFileContentsOptions,
+  createParents: boolean,
+): Promise<void> {
+  const { remote, path } = target;
+  let written: boolean;
+
+  try {
+    written = await client.putFileContents(remote, data, options);
+  } catch (error) {
+    const parent = parentCollection(remote);
+    if (!createParents || parent === undefined || toOmniFsError(error).code !== 'Conflict') {
+      throw error;
+    }
+    // `recursive` PROPFINDs its way down and only creates what is absent, so
+    // an ancestor that does exist is not an error.
+    await client.createDirectory(parent, {
+      recursive: true,
+      ...(options.signal !== undefined ? { signal: options.signal } : {}),
+    });
+    written = await client.putFileContents(remote, data, options);
+  }
+
+  // Both PUTs answer the same way, so both are checked here.
+  requireWritten(written, path);
+}
+
+/**
+ * `putFileContents` answers `false` instead of throwing when the server
+ * rejects a create-only PUT with 412 — see `putFileContents.js`, which
+ * swallows that one status. Discarding the boolean would report a write that
+ * never happened as a success, with someone else's bytes left on the server:
+ * on Nextcloud or sabredav, which do honour the `If-None-Match: *` that
+ * `overwrite: false` sends, that is the outcome of losing the race against
+ * `#exists`. `AlreadyExists` is also the truer code for it than the `Conflict`
+ * a thrown 412 maps to.
+ */
+function requireWritten(written: boolean, path: string): void {
+  if (!written) throw OmniFsError.alreadyExists(path);
 }
 
 /**
@@ -240,6 +409,96 @@ export function translateReadStream(
     },
     cancel(reason) {
       return reader.cancel(reason);
+    },
+  });
+}
+
+/** The slice of the client `openWriteStream` drives. */
+export type WriteStreamClient = Pick<WebDAVClient, 'createWriteStream'>;
+
+/**
+ * Starts the PUT and hands back the web stream its body is written to.
+ *
+ * The client sends the request immediately and returns the body stream, so the
+ * server's answer arrives on the success callback or as an `error` event on
+ * that stream — never as a rejection here. Both are wired into `uploaded`,
+ * which `translateWriteStream` waits for: the node stream finishes when the
+ * last chunk is *queued*, and a writer that reported success there would lose
+ * every byte of a rejected upload.
+ *
+ * The `error` listener is not belt-and-braces. A failure that lands before the
+ * body is closed also reaches the caller through the errored web writer, but
+ * one that lands *after* — the usual case, since the server answers when it
+ * has the whole body — would otherwise leave `uploaded` unsettled and hang
+ * `close()` forever.
+ */
+export function openWriteStream(
+  client: WriteStreamClient,
+  target: { readonly remote: string; readonly path: string },
+  options: CreateWriteStreamOptions,
+): WritableStream<Uint8Array> {
+  let acknowledge!: () => void;
+  let fail!: (error: unknown) => void;
+  const uploaded = new Promise<void>((resolve, reject) => {
+    acknowledge = resolve;
+    fail = reject;
+  });
+
+  const stream = client.createWriteStream(target.remote, options, () => {
+    acknowledge();
+  });
+  stream.on('error', fail);
+
+  const web = Writable.toWeb(stream) as WritableStream<Uint8Array>;
+  return translateWriteStream(web, target.path, uploaded);
+}
+
+/**
+ * The write-side pair of `translateReadStream`, with one extra job.
+ *
+ * Translation first: a 401, a 507 or a dropped connection reaches the caller
+ * as a raw `Error` otherwise, which `provider.ts` forbids. Then the part that
+ * is only true on the write side — `uploaded` settles when the server has
+ * answered the PUT, and `close()` waits for it. Measured against the dev
+ * server, a plain `Writable.toWeb` wrapper resolves both `write()` and
+ * `close()` for an upload the server rejected with 401: the bytes are gone and
+ * the caller is told the write succeeded. Waiting for the answer is what makes
+ * a closed writer mean the file is on the server.
+ *
+ * That wait is deliberately unbounded: a server that takes the whole body and
+ * then never answers hangs `close()`, where the naive version wrongly resolved.
+ * Hanging is the better failure — it is visible, and it is the caller's
+ * `AbortSignal` (passed through to the request in `createWriteStream`) that
+ * ends it. Do not add a timeout here that resolves the close.
+ */
+export function translateWriteStream(
+  target: WritableStream<Uint8Array>,
+  path: string,
+  uploaded: Promise<void>,
+): WritableStream<Uint8Array> {
+  // A caller that abandons the stream never awaits `uploaded`; keep its
+  // rejection handled so a failed upload cannot crash the process.
+  void uploaded.catch(() => undefined);
+
+  const writer = target.getWriter();
+  return new WritableStream<Uint8Array>({
+    async write(chunk) {
+      try {
+        await writer.write(chunk);
+      } catch (error) {
+        throw toOmniFsError(error, path);
+      }
+    },
+    async close() {
+      try {
+        await writer.close();
+        await uploaded;
+      } catch (error) {
+        throw toOmniFsError(error, path);
+      }
+    },
+    abort(reason) {
+      return writer.abort(reason);
     },
   });
 }
