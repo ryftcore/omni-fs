@@ -1,5 +1,6 @@
+import { Readable } from 'node:stream';
 import { AuthType, createClient, type FileStat as DavStat, type WebDAVClient } from 'webdav';
-import { OmniFsError } from '@omni-fs/core';
+import { OmniFsError, collectStream } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -101,20 +102,37 @@ export class WebdavFileSystem implements RemoteFileSystem {
     }
   }
 
-  // Tasks 6-8 replace the four members below with real implementations. They
-  // exist because `readFile`, `createReadStream`, `writeFile` and `delete` are
-  // non-optional on `RemoteFileSystem`, so the class does not satisfy the
-  // contract without them.
+  // Tasks 7-8 replace the two members below with real implementations. They
+  // exist because `writeFile` and `delete` are non-optional on
+  // `RemoteFileSystem`, so the class does not satisfy the contract without
+  // them.
 
-  async readFile(_path: RemotePath, _options?: ReadOptions): Promise<Uint8Array> {
-    throw OmniFsError.unsupported('readFile', 'webdav');
+  async readFile(path: RemotePath, options?: ReadOptions): Promise<Uint8Array> {
+    try {
+      return await collectStream(await this.createReadStream(path, options));
+    } catch (error) {
+      throw toOmniFsError(error, path.value);
+    }
   }
 
   async createReadStream(
-    _path: RemotePath,
-    _options?: ReadOptions,
+    path: RemotePath,
+    options?: ReadOptions,
   ): Promise<ReadableStream<Uint8Array>> {
-    throw OmniFsError.unsupported('createReadStream', 'webdav');
+    const range = buildRange(options);
+    const stream = this.#requireClient().createReadStream(this.#remote(path), {
+      ...(range !== undefined ? { range } : {}),
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+    });
+
+    // The library hands back a Node stream; the contract asks for a web one.
+    // `client.createReadStream` returns synchronously, before the HTTP
+    // request has even been sent — a 404, a 401 or a dropped connection
+    // surfaces later as an error event on the stream, not as a rejection
+    // here. `translateReadStream` gives that late error the same
+    // `OmniFsError` translation `stat` and `list` get through `#run`.
+    const web = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+    return translateReadStream(web, path.value);
   }
 
   async writeFile(_path: RemotePath, _data: Uint8Array, _options?: WriteOptions): Promise<void> {
@@ -184,6 +202,46 @@ export function toFileStat(stat: DavStat): FileStat {
 export function collectionPath(value: string): string {
   const trimmed = value.replace(/\/+$/, '');
   return trimmed === '' ? '/' : trimmed;
+}
+
+/** Translates `ReadOptions` into the `webdav` client's inclusive byte range. */
+export function buildRange(
+  options: ReadOptions | undefined,
+): { start: number; end?: number } | undefined {
+  if (options?.offset === undefined) return undefined;
+  const start = options.offset;
+  return options.length === undefined ? { start } : { start, end: start + options.length - 1 };
+}
+
+/**
+ * Wraps a stream so an error arriving after `createReadStream` has already
+ * returned is still translated. `client.createReadStream` hands back its
+ * stream before the HTTP request runs, so a 404/401/dropped connection
+ * surfaces as an error event on the stream rather than a rejected promise —
+ * nothing upstream gets a chance to call `toOmniFsError` on it otherwise.
+ */
+export function translateReadStream(
+  source: ReadableStream<Uint8Array>,
+  path: string,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        throw toOmniFsError(error, path);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 }
 
 /**

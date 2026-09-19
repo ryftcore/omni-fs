@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
+import { NOOP_LOGGER, OmniFsError, RemotePath, collectStream, streamFrom } from '@omni-fs/core';
 import type { ConnectionConfig } from '@omni-fs/core';
 import type { FileStat as DavStat } from 'webdav';
-import { WebdavFileSystem, collectionPath, remotePath, toFileStat } from './webdav-file-system.js';
+import {
+  WebdavFileSystem,
+  buildRange,
+  collectionPath,
+  remotePath,
+  toFileStat,
+  translateReadStream,
+} from './webdav-file-system.js';
 import { readSettings } from './settings.js';
 
 function settings(raw: Readonly<Record<string, unknown>>) {
@@ -97,6 +104,49 @@ describe('collectionPath', () => {
   it('does not conflate a child with its like-named parent', () => {
     // The guard this backs must not drop `/docs/docs` from a listing of `/docs`.
     expect(collectionPath('/docs/docs')).not.toBe(collectionPath('/docs/'));
+  });
+});
+
+describe('buildRange', () => {
+  it('is undefined with no offset', () => {
+    expect(buildRange(undefined)).toBeUndefined();
+    expect(buildRange({})).toBeUndefined();
+  });
+
+  it('is an open-ended range when an offset is given without a length', () => {
+    expect(buildRange({ offset: 5 })).toEqual({ start: 5 });
+  });
+
+  it('is an inclusive closed range when both offset and length are given', () => {
+    // Byte 2 for a length of 3 covers bytes 2, 3 and 4 — an inclusive `end`.
+    expect(buildRange({ offset: 2, length: 3 })).toEqual({ start: 2, end: 4 });
+  });
+});
+
+describe('translateReadStream', () => {
+  it('passes chunks through untouched', async () => {
+    const source = streamFrom(new TextEncoder().encode('hello'));
+    const bytes = await collectStream(translateReadStream(source, '/hello.txt'));
+    expect(new TextDecoder().decode(bytes)).toBe('hello');
+  });
+
+  it('translates a late error event on the source into an OmniFsError', async () => {
+    // Mirrors what the `webdav` client actually does on a 404: the stream is
+    // handed back before the request runs, and the failure only arrives as
+    // an error on the stream — never as a rejected promise beforehand.
+    const notFound = new Error('Invalid response: 404 Not Found') as Error & { status: number };
+    notFound.status = 404;
+    const source = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        controller.error(notFound);
+      },
+    });
+
+    const reader = translateReadStream(source, '/missing.txt').getReader();
+    await expect(reader.read()).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'NotFound' && error.path === '/missing.txt',
+    );
   });
 });
 

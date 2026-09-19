@@ -62,4 +62,53 @@ describe('WebdavFileSystem against a live server', () => {
       await fs[Symbol.asyncDispose]();
     }
   });
+
+  it('reads a whole file', async () => {
+    const fs = connect();
+    await fs.connect();
+    try {
+      const bytes = await fs.readFile(RemotePath.parse('/readme.txt'));
+      expect(new TextDecoder().decode(bytes)).toContain('omni-fs test file');
+    } finally {
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('reads a byte range', async () => {
+    const fs = connect();
+    await fs.connect();
+    try {
+      // The seeded readme.txt is exactly "omni-fs test file\n".
+      const slice = await fs.readFile(RemotePath.parse('/readme.txt'), { offset: 0, length: 7 });
+      expect(new TextDecoder().decode(slice)).toBe('omni-fs');
+    } finally {
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects readFile for a missing path with a translated NotFound', async () => {
+    const fs = connect();
+    await fs.connect();
+    try {
+      await expect(fs.readFile(RemotePath.parse('/definitely-not-here.txt'))).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+      );
+    } finally {
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('errors the stream from createReadStream with a translated NotFound', async () => {
+    const fs = connect();
+    await fs.connect();
+    try {
+      const stream = await fs.createReadStream(RemotePath.parse('/definitely-not-here.txt'));
+      const reader = stream.getReader();
+      await expect(reader.read()).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+      );
+    } finally {
+      await fs[Symbol.asyncDispose]();
+    }
+  });
 });
