@@ -1,0 +1,125 @@
+# Local servers for testing omni-fs against real protocols.
+#
+#   docker compose up -d      # start
+#   docker compose down -v    # stop and delete all test data
+#
+# Everything here is throwaway: the credentials below are committed on purpose
+# and must never be used anywhere real. Nothing binds to a public interface.
+#
+# Only S3 is implemented today, so MinIO is the one server you can browse.
+# FTP, SFTP and WebDAV are skeletons that throw `Unsupported` from connect() —
+# their servers are here to exercise the connection form now, and to be the
+# targets the conformance suite runs against once those providers are written.
+
+name: omni-fs-dev
+
+services:
+  # --- S3 -------------------------------------------------------------------
+  # Console: http://localhost:9001  (omnifs / omnifs-dev-secret)
+  minio:
+    image: quay.io/minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: omnifs
+      MINIO_ROOT_PASSWORD: omnifs-dev-secret
+    ports:
+      - '127.0.0.1:9000:9000'
+      - '127.0.0.1:9001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  # Creates the buckets and a tree worth browsing: nested "directories" that do
+  # not really exist on an object store, a file big enough for ranged reads,
+  # and an empty bucket for the empty-listing case.
+  minio-init:
+    image: quay.io/minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        set -e
+        mc alias set dev http://minio:9000 omnifs omnifs-dev-secret
+        mc mb --ignore-existing dev/omni-fs-test
+        mc mb --ignore-existing dev/omni-fs-empty
+        echo 'omni-fs test bucket' | mc pipe dev/omni-fs-test/readme.txt
+        echo '# Guide'             | mc pipe dev/omni-fs-test/docs/guide.md
+        echo 'three levels down'   | mc pipe dev/omni-fs-test/docs/nested/deep/deep.txt
+        echo '{"ok":true}'         | mc pipe dev/omni-fs-test/data/sample.json
+        head -c 3145728 /dev/urandom | mc pipe dev/omni-fs-test/data/large.bin
+        mc ls --recursive dev/omni-fs-test
+        echo "seed complete"
+    restart: 'no'
+
+  # --- SFTP -----------------------------------------------------------------
+  sftp:
+    build: ./docker/sftp
+    ports:
+      - '127.0.0.1:2222:22'
+    volumes:
+      - sftp-data:/data
+
+  # --- FTP ------------------------------------------------------------------
+  # Passive mode needs its data ports published too, or listings hang.
+  ftp:
+    image: delfer/alpine-ftp-server:latest
+    environment:
+      USERS: 'omnifs|omnifs-dev-secret|/ftp/omnifs|1001'
+      ADDRESS: localhost
+      MIN_PORT: 21000
+      MAX_PORT: 21010
+    ports:
+      - '127.0.0.1:2121:21'
+      - '127.0.0.1:21000-21010:21000-21010'
+    volumes:
+      - ftp-data:/ftp/omnifs
+
+  # --- WebDAV ---------------------------------------------------------------
+  webdav:
+    image: dgraziotin/nginx-webdav-nononsense:latest
+    environment:
+      WEBDAV_USERNAME: omnifs
+      WEBDAV_PASSWORD: omnifs-dev-secret
+    ports:
+      - '127.0.0.1:8081:80'
+    volumes:
+      - webdav-data:/data
+
+  # Gives the three file servers an identical tree, so the same manual test
+  # works against each one. Runs once and exits.
+  file-seed:
+    image: alpine:3.20
+    depends_on: [sftp, ftp, webdav]
+    entrypoint: ['/bin/sh', '-c']
+    command:
+      - |
+        set -e
+        for d in /seed/sftp /seed/ftp /seed/webdav; do
+          mkdir -p "$$d/docs/nested/deep" "$$d/data"
+          echo 'omni-fs test file'  > "$$d/readme.txt"
+          echo '# Guide'            > "$$d/docs/guide.md"
+          echo 'three levels down'  > "$$d/docs/nested/deep/deep.txt"
+          echo '{"ok":true}'        > "$$d/data/sample.json"
+          head -c 1048576 /dev/urandom > "$$d/data/large.bin"
+        done
+        chown -R 1000:1000 /seed/sftp
+        chown -R 1001:1001 /seed/ftp
+        chown -R 911:1000  /seed/webdav
+        echo "file seed complete"
+    volumes:
+      - sftp-data:/seed/sftp
+      - ftp-data:/seed/ftp
+      - webdav-data:/seed/webdav
+    restart: 'no'
+
+volumes:
+  minio-data:
+  sftp-data:
+  ftp-data:
+  webdav-data:
