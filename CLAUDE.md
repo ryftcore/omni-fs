@@ -134,6 +134,11 @@ overridden to impersonate any protocol. `pnpm test` runs the suite against it
 twice — full-featured, then pinned to an object-store profile — which is what
 catches a test that assumes real directories exist.
 
+The same contract has a live target: a provider package's `test:conformance`
+script runs it against that protocol's server in `compose.yaml`. The hermetic
+runs prove the suite is coherent; the live run is the one that says a real
+protocol meets it, which is why a provider is finished exactly when it passes.
+
 ## Repo constraints
 
 - **Commits are a single title line**: `:emoji: <type> <description>`, no body.
@@ -161,8 +166,10 @@ catches a test that assumes real directories exist.
 
 ## Current state
 
-S3 is implemented. FTP, SFTP and WebDAV are deliberate skeletons: capabilities
-and schemas declared, methods throwing `Unsupported`. Download/upload commands
-are stubs — the queue, retry and progress already exist in core; only the
-local-file half is missing. `turbo.json` defines a `test:conformance` task that
-no package implements yet.
+S3 and WebDAV are implemented; FTP and SFTP are deliberate skeletons:
+capabilities and schemas declared, methods throwing `Unsupported`. WebDAV
+declares `canWatch: false` because the protocol has no change notification at
+all, so core polls it. Download/upload commands are stubs — the queue, retry
+and progress already exist in core; only the local-file half is missing.
+`pnpm test:conformance` runs the shared suite against the live servers in
+`compose.yaml`; `packages/provider-webdav` implements it today.

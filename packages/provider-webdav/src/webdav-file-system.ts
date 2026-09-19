@@ -30,12 +30,16 @@ import {
  * WebDAV, including Nextcloud and ownCloud.
  *
  * The one protocol of the four with both a native server-side copy (`COPY`) and
- * real directories (`MKCOL`), so almost nothing is emulated above it. Unlike S3
- * a directory is a real resource, which makes this the first provider to
- * exercise the `hasRealDirectories: true` half of the conformance suite. It has
- * no ranged-write support, and ETag support is server-dependent — see the
- * `hasVersionTokens` comment on `WEBDAV_CAPABILITIES` at the bottom of this
- * file.
+ * real directories (`MKCOL`), so almost nothing is emulated above it. Unlike
+ * S3, where a directory is a prefix inferred from the keys under it, here it is
+ * a resource the server creates, lists and deletes — this is the first provider
+ * for which `hasRealDirectories: true` is the truth rather than a claim about
+ * emulation. The conformance suite does not gate on that flag, and must not:
+ * its directory cases run for every provider, which is what lets
+ * `MemoryFileSystem` be run against them twice, once full-featured and once
+ * pinned to an object-store profile. It has no ranged-write support, and ETag
+ * support is server-dependent — see the `hasVersionTokens` comment on
+ * `WEBDAV_CAPABILITIES` at the bottom of this file.
  */
 export class WebdavFileSystem implements RemoteFileSystem {
   // WEBDAV_CAPABILITIES is declared at the bottom of this file and re-exported
@@ -458,10 +462,11 @@ export const WEBDAV_CAPABILITIES: ProviderCapabilities = {
   // Measured against dgraziotin/nginx-webdav-nononsense: an `ETag` header is
   // present on GET/HEAD, but PROPFIND bodies never include a `getetag`
   // property. The `webdav` client derives both `stat()` and `list()` from
-  // PROPFIND, so neither can produce a version token against this server —
-  // declared false so the conformance suite skips the `ifMatch` path rather
-  // than failing it. Real Nextcloud and sabredav do return `getetag`; see
-  // task-4-report.md.
+  // PROPFIND, so neither can produce a version token against this server, and
+  // false is simply what is true of it. Nothing currently checks that either
+  // way: the shared suite has no case exercising `ifMatch`, and no case reads
+  // this flag — so declaring it false buys no skip, it just avoids a lie. Real
+  // Nextcloud and sabredav do return `getetag`; see task-4-report.md.
   hasVersionTokens: false,
   maxConcurrency: 6,
   listIsPaginated: false,

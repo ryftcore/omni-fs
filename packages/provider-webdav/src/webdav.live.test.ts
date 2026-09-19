@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
-import type { ConnectionConfig } from '@omni-fs/core';
+import type { ConnectionConfig, RemoteFileSystem } from '@omni-fs/core';
+import { runConformanceSuite } from '@omni-fs/testing';
 import { createClient } from 'webdav';
 import { WebdavFileSystem } from './webdav-file-system.js';
 
@@ -40,6 +41,51 @@ function encode(value: string): Uint8Array {
 function decode(bytes: Uint8Array): string {
   return new TextDecoder().decode(bytes);
 }
+
+/**
+ * The shared behavioural contract, run against the live server. This is what
+ * decides the provider is finished: the cases below it are this package's own,
+ * and drift between the four providers is exactly what they cannot catch.
+ *
+ * Declared ahead of them on purpose. The suite creates and removes a directory
+ * per case, and `leaves the seeded root exactly as it found it` at the bottom
+ * of this file then runs after all of them and proves nothing survived. That
+ * ordering is load-bearing, and it rests on vitest's default of running suites
+ * in declaration order: turn on `sequence.shuffle` or mark either suite
+ * `.concurrent` and the cross-check stops holding silently, with no failure
+ * pointing at the cause.
+ *
+ * `runConformanceSuite` calls `setup()` inside *every* case rather than once
+ * per run, so each of the thirteen gets a root of its own. A timestamp alone
+ * would not keep them apart — two cases can enter the same millisecond — hence
+ * the counter. And `teardown` is handed only the filesystem, never the root,
+ * so the pairing has to be remembered here or nothing could ever delete them.
+ */
+let conformanceRuns = 0;
+const conformanceRoots = new WeakMap<RemoteFileSystem, RemotePath>();
+
+runConformanceSuite({
+  name: 'WebDAV (nginx)',
+  setup: async () => {
+    const fs = connect();
+    await fs.connect();
+    conformanceRuns += 1;
+    const root = RemotePath.parse(`/conformance-${String(Date.now())}-${String(conformanceRuns)}`);
+    await fs.createDirectory(root);
+    conformanceRoots.set(fs, root);
+    return { fs, root };
+  },
+  teardown: async (fs) => {
+    const root = conformanceRoots.get(fs);
+    conformanceRoots.delete(fs);
+    // Through the raw client, like every other cleanup here: a teardown that
+    // ran through `fs.delete` — one of the methods under test — could not fail
+    // safely, and one failure leaves a `conformance-*` directory behind for
+    // every run after it.
+    if (root !== undefined) await remove(`${root.value}/`);
+    await fs[Symbol.asyncDispose]();
+  },
+});
 
 describe('WebdavFileSystem against a live server', () => {
   it('connects and stats the root as a directory', async () => {

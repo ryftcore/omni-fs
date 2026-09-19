@@ -22,14 +22,33 @@ docs/nested/deep/deep.txt
 
 ## What you can actually test today
 
-Only `provider-s3` is implemented. FTP, SFTP and WebDAV throw `Unsupported`
-from `connect()`, so **Test Connection will fail for those three** with
-"… is not implemented yet". That is the correct result, and it is still worth
-running: it exercises the probe path, the error mapping and the form's error
-display. Browsing files works on S3 alone.
+`provider-s3` and `provider-webdav` are implemented. FTP and SFTP throw
+`Unsupported` from `connect()`, so **Test Connection will fail for those two**
+with "… is not implemented yet". That is the correct result, and it is still
+worth running: it exercises the probe path, the error mapping and the form's
+error display. Browsing files works on S3 and WebDAV.
 
-The other three servers are here so those providers can be written against
-something real, and so `pnpm test:conformance` has a target when it lands.
+The remaining two servers are here so those providers can be written against
+something real.
+
+## Conformance suite
+
+With the stack up, the shared behavioural contract runs against the live
+servers:
+
+```bash
+docker compose up -d
+pnpm test:conformance
+```
+
+Providers that are still skeletons contribute no cases — only
+`packages/provider-webdav` defines the script today, so WebDAV is the whole of
+what runs. A provider is finished exactly when this passes for it.
+
+Every case makes its own `/conformance-<timestamp>-<n>` directory and removes
+it again, so the seeded tree above is what a `PROPFIND` should show both before
+and after a run. Anything called `conformance-*` left behind is a bug in the
+harness, not in the server.
 
 ## S3 — MinIO
 
