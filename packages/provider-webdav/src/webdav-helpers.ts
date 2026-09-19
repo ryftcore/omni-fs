@@ -13,9 +13,15 @@ import type { WebdavSettings } from './settings.js';
 // The functions here are exported so the hermetic suite can reach them without
 // a server — the ones that do talk to a server take the client as an argument,
 // so a fake stands in for it. They are deliberately not re-exported from
-// index.ts: they are this package's internals, not its public API. They live
-// beside `webdav-file-system.ts` rather than inside it so that file is the
-// class and nothing else.
+// index.ts: they are this package's internals, not its public API.
+//
+// They live beside `webdav-file-system.ts` rather than inside it because that
+// file had grown to 557 lines of class and module scope together. What moved
+// is what was exported from module scope, and only that. `requireUsername`,
+// `requireString` and `WEBDAV_CAPABILITIES` stayed behind on purpose: the
+// first two are `connect()`'s own failure vocabulary and moving them would
+// mean exporting them solely to cross a file boundary, and the third is not a
+// helper at all.
 
 /**
  * Applies the connection's root prefix, so a connection can be scoped to a

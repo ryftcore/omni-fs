@@ -6,6 +6,7 @@ import type {
   DirEntry,
   FileStat,
   Logger,
+  OverwriteOptions,
   ProviderCapabilities,
   ProviderContext,
   ReadOptions,
@@ -13,7 +14,7 @@ import type {
   RemotePath,
   WriteOptions,
 } from '@omni-fs/core';
-import { toOmniFsError } from './errors.js';
+import { isPreconditionFailed, toOmniFsError } from './errors.js';
 import { readSettings, type WebdavSettings } from './settings.js';
 import {
   buildRange,
@@ -131,8 +132,10 @@ export class WebdavFileSystem implements RemoteFileSystem {
     // zero-length read of a missing path, or one through an already-aborted
     // signal, would succeed emptily, where MemoryFileSystem — the contract's
     // reference — raises NotFound and Cancelled before it slices anything.
-    // Only the bytes are short-circuited, never the question of whether the
-    // read was allowed to happen at all.
+    // Those two are all it settles: the `type` it also returns is not
+    // inspected, so a zero-length read of a directory still answers with no
+    // bytes where the reference raises IsADirectory. That gap is recorded for
+    // a later plan, not closed here.
     if (range === 'empty') {
       await this.stat(path, options?.signal);
       return streamFrom(new Uint8Array(0));
@@ -211,12 +214,161 @@ export class WebdavFileSystem implements RemoteFileSystem {
     );
   }
 
-  // Task 8 replaces the member below with a real implementation. It exists
-  // because `delete` is non-optional on `RemoteFileSystem`, so the class does
-  // not satisfy the contract without it.
+  // Known gap, shared by `delete`, `rename` and `copy` below: none of the three
+  // looks at a 207 Multi-Status. RFC 4918 §9.6.1 says a 207 from DELETE always
+  // means at least one member failed — successfully deleted members MUST NOT
+  // appear in the body — and §9.8.5 and §9.9.4 allow the same for COPY and
+  // MOVE, which both act at `Depth: infinity`. The `webdav` client's
+  // `deleteFile`, `copyFile` and `moveFile` all discard the response, so a
+  // partial failure reads here as a clean success.
+  //
+  // The fix is 207 *detection*, not parsing: `client.customRequest` performs
+  // the same `joinURL`/`encodePath`/`handleResponseCode` and hands back the
+  // raw `Response`, so `if (response.status === 207) throw …` is the whole of
+  // it, and a fake client stands in for it in the hermetic suite exactly as
+  // `PutClient` does. It is deferred rather than half-done because closing
+  // only `delete` would leave the identical hazard in the other two while
+  // making it look handled. `conformance.ts`'s recursive-delete case would
+  // catch the DELETE half the first time the suite meets a server answering
+  // 207.
 
-  async delete(_path: RemotePath, _options?: DeleteOptions): Promise<void> {
-    throw OmniFsError.unsupported('delete', 'webdav');
+  /**
+   * `DELETE`, which on a collection is recursive whether the caller wanted it
+   * or not: `Depth: infinity` is the only value the method allows (RFC 4918
+   * §9.6.1), so `recursive: false` means nothing on the wire. Refusing a
+   * non-empty directory is therefore this provider's job — skip it and a
+   * caller who asked to remove an empty directory silently loses a tree.
+   *
+   * That check is check-then-act, and unlike the write guards below this one
+   * can destroy data: a child written between `#firstChild` and the DELETE
+   * goes with the collection. There is no atomic non-recursive DELETE in the
+   * protocol to close the window with, so it is inherent rather than an
+   * oversight — but it is the one race in this class that loses bytes.
+   */
+  async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
+    const signal = options?.signal;
+
+    if (options?.recursive !== true && (await this.stat(path, signal)).type === 'directory') {
+      if ((await this.#firstChild(path, signal)) !== undefined) {
+        throw new OmniFsError({
+          code: 'NotEmpty',
+          message: `Directory is not empty: ${path.value}`,
+          path: path.value,
+          providerId: 'webdav',
+        });
+      }
+    }
+
+    await this.#run(
+      (client) =>
+        client.deleteFile(this.#remote(path), {
+          ...(signal !== undefined ? { signal } : {}),
+        }),
+      path.value,
+    );
+  }
+
+  /**
+   * `MKCOL`, building any missing ancestors on the way down.
+   *
+   * `recursive` PROPFINDs the chain and only creates what is absent, so an
+   * ancestor that is already there is not an error and neither is the target
+   * itself — which matches `MemoryFileSystem`, the contract's reference, where
+   * creating an existing directory is a no-op. Plain `MKCOL` would answer 405
+   * for that and 409 for a missing parent, disagreeing with the reference on
+   * both. The live suite pins both behaviours, so simplifying this to a plain
+   * `MKCOL` fails rather than silently changing what the method means.
+   *
+   * Known gap: when a *file* already sits at `path`, the library's recursive
+   * walk throws a bare `Error('Path includes a file: …')` carrying no HTTP
+   * status, so `toOmniFsError` can only classify it `Unknown` where the
+   * reference raises `AlreadyExists`. The single handle on it is that English
+   * message from a library internal, and branching on it would be worse than
+   * the gap.
+   */
+  async createDirectory(path: RemotePath, signal?: AbortSignal): Promise<void> {
+    await this.#run(
+      (client) =>
+        client.createDirectory(this.#remote(path), {
+          recursive: true,
+          ...(signal !== undefined ? { signal } : {}),
+        }),
+      path.value,
+    );
+  }
+
+  /**
+   * `MOVE`, which is a real server-side rename — no read-back, no re-upload,
+   * and atomic as far as the caller is concerned.
+   */
+  async rename(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
+    const signal = options?.signal;
+    try {
+      await this.#requireClient().moveFile(this.#remote(from), this.#remote(to), {
+        overwrite: options?.overwrite !== false,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch (error) {
+      throw this.#transferError(error, from, to, options);
+    }
+  }
+
+  /** `COPY`, the server-side copy `canCopyServerSide: true` promises. */
+  async copy(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
+    const signal = options?.signal;
+    try {
+      await this.#requireClient().copyFile(this.#remote(from), this.#remote(to), {
+        overwrite: options?.overwrite !== false,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch (error) {
+      throw this.#transferError(error, from, to, options);
+    }
+  }
+
+  /**
+   * Names a failed `COPY` or `MOVE`. Both go through `toOmniFsError` like
+   * everything else, except for the one status whose meaning only the caller's
+   * options fix: with `overwrite: false` the request carried `Overwrite: F`,
+   * and the 412 that comes back names the destination, not a lost `If-Match`.
+   *
+   * Every other failure is named with the source, which is what the caller
+   * asked about and right for the common 404. It is wrong for exactly one
+   * case: a 409 from COPY or MOVE means the *destination's* parent collection
+   * is missing (RFC 4918 §9.8.5, §9.9.4), so the error points at the wrong end
+   * of the operation. `OmniFsError` carries one path, the server's own words
+   * are in the message, and guessing per status would be its own trap — so
+   * this is recorded rather than papered over.
+   */
+  #transferError(
+    error: unknown,
+    from: RemotePath,
+    to: RemotePath,
+    options: OverwriteOptions | undefined,
+  ): OmniFsError {
+    return options?.overwrite === false && isPreconditionFailed(error)
+      ? OmniFsError.alreadyExists(to.value, error)
+      : toOmniFsError(error, from.value);
+  }
+
+  /**
+   * The first child of a collection, or nothing when it has none.
+   *
+   * The iterator is taken by hand and released rather than drained, which is
+   * the question actually being asked. It saves nothing on the wire *here*:
+   * this provider's `list` awaits the whole PROPFIND before it yields its
+   * first entry, so that entry is already paid for. `RemoteFileSystem.list` is
+   * an async iterable for the providers where it does stream — S3's paginated
+   * listing — and reading it that way costs nothing either way.
+   */
+  async #firstChild(path: RemotePath, signal?: AbortSignal): Promise<DirEntry | undefined> {
+    const children = this.list(path, signal)[Symbol.asyncIterator]();
+    try {
+      const first = await children.next();
+      return first.done === true ? undefined : first.value;
+    } finally {
+      await children.return?.();
+    }
   }
 
   /**

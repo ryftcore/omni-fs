@@ -45,6 +45,20 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
   return new OmniFsError({ ...base, code: 'Unknown', message });
 }
 
+/**
+ * Whether the server answered 412 Precondition Failed.
+ *
+ * A 412 means two different things to this provider and only the call site can
+ * tell them apart, so `toOmniFsError` cannot decide for both. On a `COPY` or
+ * `MOVE` the caller asked not to overwrite, the request carried `Overwrite: F`
+ * and a 412 says one thing only — the destination is already there, which is
+ * `AlreadyExists`. On an `If-Match` write it says the remote moved on, which is
+ * `Conflict`, and that is what the shared mapping keeps meaning.
+ */
+export function isPreconditionFailed(cause: unknown): boolean {
+  return httpStatus(cause) === 412;
+}
+
 function errorName(cause: unknown): string {
   if (typeof cause !== 'object' || cause === null) return '';
   const name = (cause as { name?: unknown }).name;

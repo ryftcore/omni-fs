@@ -23,8 +23,8 @@ export function connect(password: string = PASSWORD): WebdavFileSystem {
 }
 
 /**
- * Cleanup goes through the raw client on purpose: `delete` is still a Task 8
- * stub, and a test that cannot remove what it wrote would leave the seeded
+ * Cleanup goes through the raw client on purpose: it must still work when the
+ * method under test does not, or a failing `delete` would leave the seeded
  * tree dirty for every task after this one. Name a collection with a trailing
  * slash — the server then removes it and everything under it.
  */
@@ -263,6 +263,148 @@ describe('WebdavFileSystem against a live server', () => {
       expect(decode(await fs.readFile(path))).toBe('first');
     } finally {
       await remove('/write-stream-guard.txt');
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('creates a directory, copies, renames and deletes recursively', async () => {
+    const fs = connect();
+    const dir = RemotePath.parse('/tree-probe');
+    try {
+      await fs.connect();
+      await fs.createDirectory?.(dir);
+      expect((await fs.stat(dir)).type).toBe('directory');
+
+      // Both of these are `recursive: true` and nothing else. A plain MKCOL
+      // answers 405 for the repeat and 409 for the missing intermediate, so
+      // simplifying the option away fails here rather than quietly changing
+      // what createDirectory means.
+      await expect(fs.createDirectory?.(dir)).resolves.toBeUndefined();
+      await fs.createDirectory?.(dir.join('nested', 'deep'));
+      expect((await fs.stat(dir.join('nested'))).type).toBe('directory');
+      expect((await fs.stat(dir.join('nested', 'deep'))).type).toBe('directory');
+
+      const source = dir.join('source.txt');
+      await fs.writeFile(source, encode('payload'));
+
+      await fs.copy?.(source, dir.join('copy.txt'));
+      expect(decode(await fs.readFile(dir.join('copy.txt')))).toBe('payload');
+      // COPY leaves the source where it is; MOVE is the one that does not.
+      expect((await fs.stat(source)).type).toBe('file');
+
+      await fs.rename?.(source, dir.join('moved.txt'));
+      expect(decode(await fs.readFile(dir.join('moved.txt')))).toBe('payload');
+      await expect(fs.stat(source)).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+      );
+
+      // Measured: this server takes a non-empty collection out in a single
+      // DELETE, which is what `canDeleteRecursive: true` promises.
+      await fs.delete(dir, { recursive: true });
+      await expect(fs.stat(dir)).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+      );
+    } finally {
+      await remove('/tree-probe/');
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('refuses a non-recursive delete of a directory with children, but not of an empty one', async () => {
+    const fs = connect();
+    const dir = RemotePath.parse('/delete-probe');
+    const child = dir.join('child.txt');
+    try {
+      await fs.connect();
+      await fs.writeFile(child, encode('child'));
+
+      // A WebDAV DELETE on a collection always takes its children with it —
+      // `Depth: infinity` is the only value the method allows — so nothing but
+      // this provider can refuse a non-recursive delete, and getting it wrong
+      // destroys a tree the caller only asked to remove if it was empty.
+      await expect(fs.delete(dir)).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotEmpty',
+      );
+      expect(decode(await fs.readFile(child))).toBe('child');
+
+      await fs.delete(child);
+      await fs.delete(dir);
+      await expect(fs.stat(dir)).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+      );
+    } finally {
+      await remove('/delete-probe/');
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('refuses to overwrite an existing destination on copy and on rename', async () => {
+    const fs = connect();
+    const dir = RemotePath.parse('/overwrite-probe');
+    const source = dir.join('source.txt');
+    const destination = dir.join('destination.txt');
+    try {
+      await fs.connect();
+      await fs.writeFile(source, encode('source'));
+      await fs.writeFile(destination, encode('destination'));
+
+      // `Overwrite: F` is honoured here, unlike the `If-None-Match: *` that
+      // `writeFile` sends, so the server itself refuses with 412. The shared
+      // mapping reads a 412 as `Conflict` — right for a failed `If-Match`, and
+      // wrong here, where `overwrite: false` says it means the destination is
+      // already there.
+      await expect(fs.copy?.(source, destination, { overwrite: false })).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+      );
+      await expect(fs.rename?.(source, destination, { overwrite: false })).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+      );
+      expect(decode(await fs.readFile(destination))).toBe('destination');
+      // A refused MOVE must not have taken the source with it either.
+      expect(decode(await fs.readFile(source))).toBe('source');
+
+      // Overwriting is still what happens when nothing says otherwise.
+      await fs.copy?.(source, destination);
+      expect(decode(await fs.readFile(destination))).toBe('source');
+    } finally {
+      await remove('/overwrite-probe/');
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('reports each of the four mutations cancelled by its signal as Cancelled', async () => {
+    // All four reach the network, so `provider.ts` requires them to carry the
+    // caller's signal that far. An already-aborted one is the deterministic
+    // proof that they do — and the probe tree is untouched afterwards, which
+    // is what a dropped signal would break.
+    const fs = connect();
+    const dir = RemotePath.parse('/signal-probe');
+    const source = dir.join('source.txt');
+    const cancelled = (error: unknown): boolean =>
+      OmniFsError.is(error) && error.code === 'Cancelled';
+    try {
+      await fs.connect();
+      await fs.writeFile(source, encode('source'));
+
+      await expect(fs.createDirectory?.(dir.join('nested'), AbortSignal.abort())).rejects.toSatisfy(
+        cancelled,
+      );
+      // `recursive` on purpose: without it the emptiness check would cancel
+      // the call before DELETE was ever sent, proving nothing about deleteFile.
+      await expect(
+        fs.delete(source, { recursive: true, signal: AbortSignal.abort() }),
+      ).rejects.toSatisfy(cancelled);
+      await expect(
+        fs.copy?.(source, dir.join('copied.txt'), { signal: AbortSignal.abort() }),
+      ).rejects.toSatisfy(cancelled);
+      await expect(
+        fs.rename?.(source, dir.join('moved.txt'), { signal: AbortSignal.abort() }),
+      ).rejects.toSatisfy(cancelled);
+
+      expect(decode(await fs.readFile(source))).toBe('source');
+      for await (const entry of fs.list(dir)) expect(entry.name).toBe('source.txt');
+    } finally {
+      await remove('/signal-probe/');
       await fs[Symbol.asyncDispose]();
     }
   });
