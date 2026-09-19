@@ -12,7 +12,12 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
 
   if (errorName(cause) === 'AbortError') return OmniFsError.cancelled(path ?? 'WebDAV request');
 
-  switch (httpStatus(cause)) {
+  // 405 is deliberately absent from this switch — see `isMethodNotAllowed`. It
+  // falls through to `Unknown`, which is unspecific but true, rather than to
+  // `ProtocolError`: that code is retryable by default, and a method the server
+  // does not allow will not start being allowed on the second attempt.
+  const status = httpStatus(cause);
+  switch (status) {
     case 401:
       return new OmniFsError({ ...base, code: 'AuthenticationFailed', message });
     case 403:
@@ -20,9 +25,6 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
       return new OmniFsError({ ...base, code: 'PermissionDenied', message });
     case 404:
       return OmniFsError.notFound(path ?? 'resource', cause);
-    // MKCOL answers 405 when the collection is already there.
-    case 405:
-      return new OmniFsError({ ...base, code: 'AlreadyExists', message });
     case 409:
     case 412:
       return new OmniFsError({ ...base, code: 'Conflict', message });
@@ -34,7 +36,6 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
       return new OmniFsError({ ...base, code: 'ProtocolError', message, retryable: true });
   }
 
-  const status = httpStatus(cause);
   if (status !== undefined && status >= 500) {
     return new OmniFsError({ ...base, code: 'ProtocolError', message, retryable: true });
   }
@@ -57,6 +58,21 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
  */
 export function isPreconditionFailed(cause: unknown): boolean {
   return httpStatus(cause) === 412;
+}
+
+/**
+ * Whether the server answered 405 Method Not Allowed.
+ *
+ * The same shape as `isPreconditionFailed`, for the same reason. `MKCOL` has
+ * exactly one use for a 405 — RFC 4918 §9.3.1: a resource already occupies
+ * that path — which is `AlreadyExists`. For `PUT`, `DELETE`, `COPY` and `MOVE`
+ * it is instead the ordinary answer of a read-only or method-restricted
+ * server, and calling that `AlreadyExists` is actively misleading. So the
+ * shared mapping refuses to guess and `createDirectory` narrows it at its own
+ * call site, where the method is known.
+ */
+export function isMethodNotAllowed(cause: unknown): boolean {
+  return httpStatus(cause) === 405;
 }
 
 function errorName(cause: unknown): string {

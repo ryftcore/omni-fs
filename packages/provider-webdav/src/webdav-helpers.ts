@@ -7,7 +7,7 @@ import type {
 } from 'webdav';
 import { OmniFsError } from '@omni-fs/core';
 import type { FileStat, ReadOptions, RemotePath } from '@omni-fs/core';
-import { toOmniFsError } from './errors.js';
+import { isPreconditionFailed, toOmniFsError } from './errors.js';
 import type { WebdavSettings } from './settings.js';
 
 // The functions here are exported so the hermetic suite can reach them without
@@ -208,7 +208,10 @@ export function openWriteStream(
   stream.on('error', fail);
 
   const web = Writable.toWeb(stream) as WritableStream<Uint8Array>;
-  return translateWriteStream(web, target.path, uploaded);
+  // `overwrite: false` is what puts `If-None-Match: *` on the PUT, so it is
+  // also what decides whether the 412 that may come back names the destination
+  // or a lost `If-Match`. See `translateWriteStream`.
+  return translateWriteStream(web, target.path, uploaded, options.overwrite === false);
 }
 
 /**
@@ -228,15 +231,32 @@ export function openWriteStream(
  * Hanging is the better failure — it is visible, and it is the caller's
  * `AbortSignal` (passed through to the request in `createWriteStream`) that
  * ends it. Do not add a timeout here that resolves the close.
+ *
+ * `createOnly` carries the caller's `overwrite: false` this far down for the
+ * same reason `#transferError` exists on the class: a 412 means the
+ * destination is already there when the request carried `If-None-Match: *`,
+ * and means a lost `If-Match` otherwise. Only the caller's option tells the
+ * two apart, and a server that honours the header — Nextcloud, sabredav —
+ * makes this the difference between reporting `AlreadyExists` like `writeFile`
+ * does and reporting `Conflict` for the identical condition.
  */
 export function translateWriteStream(
   target: WritableStream<Uint8Array>,
   path: string,
   uploaded: Promise<void>,
+  createOnly: boolean,
 ): WritableStream<Uint8Array> {
   // A caller that abandons the stream never awaits `uploaded`; keep its
   // rejection handled so a failed upload cannot crash the process.
   void uploaded.catch(() => undefined);
+
+  // Both sides translate the same way: the server answers once it has the
+  // whole body, so its refusal usually lands on `uploaded` — but a 412 sent
+  // early errors the request stream instead, and surfaces from `write()`.
+  const translate = (error: unknown): OmniFsError =>
+    createOnly && isPreconditionFailed(error)
+      ? OmniFsError.alreadyExists(path, error)
+      : toOmniFsError(error, path);
 
   const writer = target.getWriter();
   return new WritableStream<Uint8Array>({
@@ -244,7 +264,7 @@ export function translateWriteStream(
       try {
         await writer.write(chunk);
       } catch (error) {
-        throw toOmniFsError(error, path);
+        throw translate(error);
       }
     },
     async close() {
@@ -252,7 +272,7 @@ export function translateWriteStream(
         await writer.close();
         await uploaded;
       } catch (error) {
-        throw toOmniFsError(error, path);
+        throw translate(error);
       }
     },
     abort(reason) {

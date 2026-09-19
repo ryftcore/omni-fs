@@ -9,12 +9,21 @@ const BASE_URL = process.env['OMNI_FS_WEBDAV_URL'] ?? 'http://localhost:8081';
 const USERNAME = process.env['OMNI_FS_WEBDAV_USER'] ?? 'omnifs';
 const PASSWORD = process.env['OMNI_FS_WEBDAV_PASSWORD'] ?? 'omnifs-dev-secret';
 
-export function connect(password: string = PASSWORD): WebdavFileSystem {
+/**
+ * `settings` is merged over the defaults so a case can vary one key without
+ * restating the connection. Only `rootPrefix` uses it today; it exists because
+ * that setting cannot be reached any other way — it is read once in the
+ * constructor, so there is no setter to reach afterwards.
+ */
+export function connect(
+  password: string = PASSWORD,
+  settings: Readonly<Record<string, unknown>> = {},
+): WebdavFileSystem {
   const config: ConnectionConfig = {
     id: 'live',
     providerId: 'webdav',
     label: 'live',
-    settings: { baseUrl: BASE_URL, authType: 'password', username: USERNAME },
+    settings: { baseUrl: BASE_URL, authType: 'password', username: USERNAME, ...settings },
   };
   return new WebdavFileSystem({
     config,
@@ -131,8 +140,8 @@ describe('WebdavFileSystem against a live server', () => {
 
   it('reads a whole file', async () => {
     const fs = connect();
-    await fs.connect();
     try {
+      await fs.connect();
       const bytes = await fs.readFile(RemotePath.parse('/readme.txt'));
       expect(new TextDecoder().decode(bytes)).toContain('omni-fs test file');
     } finally {
@@ -142,8 +151,8 @@ describe('WebdavFileSystem against a live server', () => {
 
   it('reads a byte range', async () => {
     const fs = connect();
-    await fs.connect();
     try {
+      await fs.connect();
       // The seeded readme.txt is exactly "omni-fs test file\n".
       const slice = await fs.readFile(RemotePath.parse('/readme.txt'), { offset: 0, length: 7 });
       expect(new TextDecoder().decode(slice)).toBe('omni-fs');
@@ -154,8 +163,8 @@ describe('WebdavFileSystem against a live server', () => {
 
   it('rejects readFile for a missing path with a translated NotFound', async () => {
     const fs = connect();
-    await fs.connect();
     try {
+      await fs.connect();
       await expect(fs.readFile(RemotePath.parse('/definitely-not-here.txt'))).rejects.toSatisfy(
         (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
       );
@@ -166,8 +175,8 @@ describe('WebdavFileSystem against a live server', () => {
 
   it('errors the stream from createReadStream with a translated NotFound', async () => {
     const fs = connect();
-    await fs.connect();
     try {
+      await fs.connect();
       const stream = await fs.createReadStream(RemotePath.parse('/definitely-not-here.txt'));
       const reader = stream.getReader();
       await expect(reader.read()).rejects.toSatisfy(
@@ -448,9 +457,54 @@ describe('WebdavFileSystem against a live server', () => {
       ).rejects.toSatisfy(cancelled);
 
       expect(decode(await fs.readFile(source))).toBe('source');
-      for await (const entry of fs.list(dir)) expect(entry.name).toBe('source.txt');
+      const survivors: string[] = [];
+      for await (const entry of fs.list(dir)) survivors.push(entry.name);
+      // Collected rather than asserted inside the loop: an empty listing would
+      // make a per-entry assertion pass without ever running.
+      expect(survivors).toEqual(['source.txt']);
     } finally {
       await remove('/signal-probe/');
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  it('scopes the whole connection to a rootPrefix', async () => {
+    // The one user-facing setting with no live cover until now. `remotePath`
+    // is unit-tested, but the interaction it feeds is not: `#remote` rewrites
+    // every path on the way out while `list` compares the server's own
+    // `filename` against the *prefixed* self path to drop the collection from
+    // its own listing, and the entries it yields must carry connection-relative
+    // paths on the way back. Read-only on purpose — this reads the seeded
+    // `docs/` and writes nothing, so it leaves the tree exactly as it found it.
+    const fs = connect(PASSWORD, { rootPrefix: 'docs' });
+    try {
+      await fs.connect();
+
+      // The connection root is the prefixed collection, not the server root.
+      expect((await fs.stat(RemotePath.ROOT)).type).toBe('directory');
+
+      const entries = [];
+      for await (const entry of fs.list(RemotePath.ROOT)) entries.push(entry);
+      const byName = new Map(entries.map((entry) => [entry.name, entry]));
+      // `docs/` itself must not appear in its own listing, and the server root's
+      // own children must not appear at all.
+      expect([...byName.keys()].sort()).toEqual(['guide.md', 'nested']);
+      expect(byName.get('guide.md')?.type).toBe('file');
+      expect(byName.get('nested')?.type).toBe('directory');
+      // Connection-relative, so a caller can feed it straight back in — the
+      // prefix belongs to the connection and must never leak into a RemotePath.
+      expect(byName.get('guide.md')?.path.value).toBe('/guide.md');
+
+      // And feeding it back in reaches the right file.
+      expect(decode(await fs.readFile(RemotePath.parse('/guide.md')))).toContain('# Guide');
+      expect((await fs.stat(RemotePath.parse('/nested'))).type).toBe('directory');
+
+      // A path that exists at the server root but not under the prefix is
+      // missing here — which is what "scoped" has to mean.
+      await expect(fs.stat(RemotePath.parse('/readme.txt'))).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+      );
+    } finally {
       await fs[Symbol.asyncDispose]();
     }
   });

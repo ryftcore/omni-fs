@@ -14,7 +14,7 @@ import type {
   RemotePath,
   WriteOptions,
 } from '@omni-fs/core';
-import { isPreconditionFailed, toOmniFsError } from './errors.js';
+import { isMethodNotAllowed, isPreconditionFailed, toOmniFsError } from './errors.js';
 import { readSettings, type WebdavSettings } from './settings.js';
 import {
   buildRange,
@@ -160,6 +160,19 @@ export class WebdavFileSystem implements RemoteFileSystem {
     return translateReadStream(web, path.value);
   }
 
+  /**
+   * `WriteOptions.contentType` is dropped, here and on `createWriteStream`.
+   * `putFileContents` hardcodes `Content-Type: application/octet-stream`
+   * (`putFileContents.js`) and `createWriteStream` sends no content type
+   * at all, so every file this provider writes is announced the same way.
+   *
+   * Reachable, but not for free: `WebDAVMethodOptions.headers` is merged last
+   * in `prepareRequestOptions`, so a header passed there does override the
+   * hardcoded one — the cost is threading it through `putWithParents` and
+   * `openWriteStream`, and deciding what a streamed write with no declared
+   * length should say. Nothing in core sets `contentType` today, so that buys
+   * nothing yet. Recorded rather than silently accepted.
+   */
   async writeFile(path: RemotePath, data: Uint8Array, options?: WriteOptions): Promise<void> {
     if (options?.overwrite === false && (await this.#exists(path, options.signal))) {
       throw OmniFsError.alreadyExists(path.value);
@@ -203,7 +216,10 @@ export class WebdavFileSystem implements RemoteFileSystem {
     const client = this.#requireClient();
     // `overwrite: false` puts `If-None-Match: *` on the request, but a server
     // is free to ignore it — the dev image does — so the guard is what
-    // actually makes the option mean something.
+    // actually makes the option mean something. On a server that honours it,
+    // losing the race against this check comes back as a 412 instead, and
+    // `openWriteStream` narrows that to `AlreadyExists` so a stream reports
+    // the condition the same way `writeFile`, `copy` and `rename` do.
     if (options?.overwrite === false && (await this.#exists(path, options.signal))) {
       throw OmniFsError.alreadyExists(path.value);
     }
@@ -283,6 +299,16 @@ export class WebdavFileSystem implements RemoteFileSystem {
    * both. The live suite pins both behaviours, so simplifying this to a plain
    * `MKCOL` fails rather than silently changing what the method means.
    *
+   * The 405 narrowing is the same move `#transferError` makes for 412: only
+   * this call site knows the method was `MKCOL`, which is the one method whose
+   * 405 means "something is already there" rather than "the server does not
+   * allow that here" — so `errors.ts` cannot classify it and this does. With
+   * `recursive: true` the chain is PROPFINDed first, so the only way to reach
+   * it is a racing creator between the PROPFIND and the `MKCOL`. It is
+   * reported rather than swallowed as a no-op: a server that refuses `MKCOL`
+   * outright answers the same 405, and turning that into a silent success
+   * would be the very defect this provider was audited for twice.
+   *
    * Known gap: when a *file* already sits at `path`, the library's recursive
    * walk throws a bare `Error('Path includes a file: …')` carrying no HTTP
    * status, so `toOmniFsError` can only classify it `Unknown` where the
@@ -291,14 +317,16 @@ export class WebdavFileSystem implements RemoteFileSystem {
    * the gap.
    */
   async createDirectory(path: RemotePath, signal?: AbortSignal): Promise<void> {
-    await this.#run(
-      (client) =>
-        client.createDirectory(this.#remote(path), {
-          recursive: true,
-          ...(signal !== undefined ? { signal } : {}),
-        }),
-      path.value,
-    );
+    try {
+      await this.#requireClient().createDirectory(this.#remote(path), {
+        recursive: true,
+        ...(signal !== undefined ? { signal } : {}),
+      });
+    } catch (error) {
+      throw isMethodNotAllowed(error)
+        ? OmniFsError.alreadyExists(path.value, error)
+        : toOmniFsError(error, path.value);
+    }
   }
 
   /**

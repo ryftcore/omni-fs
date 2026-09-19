@@ -301,7 +301,7 @@ describe('translateWriteStream', () => {
       acknowledge = resolve;
     });
 
-    const writer = translateWriteStream(target, '/out.txt', uploaded).getWriter();
+    const writer = translateWriteStream(target, '/out.txt', uploaded, false).getWriter();
     await writer.write(new TextEncoder().encode('one|'));
     await writer.write(new TextEncoder().encode('two'));
 
@@ -325,7 +325,7 @@ describe('translateWriteStream', () => {
     const { target } = sink();
     const uploaded = Promise.reject(httpError(401, 'Invalid response: 401 Unauthorized'));
 
-    const writer = translateWriteStream(target, '/out.txt', uploaded).getWriter();
+    const writer = translateWriteStream(target, '/out.txt', uploaded, false).getWriter();
     await writer.write(new TextEncoder().encode('never lands'));
     await expect(writer.close()).rejects.toSatisfy(
       (error: unknown) =>
@@ -340,9 +340,53 @@ describe('translateWriteStream', () => {
       },
     });
 
-    const writer = translateWriteStream(target, '/out.txt', Promise.resolve()).getWriter();
+    const writer = translateWriteStream(target, '/out.txt', Promise.resolve(), false).getWriter();
     await expect(writer.write(new TextEncoder().encode('too big'))).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'QuotaExceeded',
+    );
+  });
+
+  it('reports a create-only upload the server refused with 412 as AlreadyExists', async () => {
+    // The overwrite guard in `createWriteStream` is check-then-act, so on a
+    // server that honours `If-None-Match: *` — Nextcloud, sabredav — losing
+    // the race lands here as a 412. `writeFile`, `copy` and `rename` all call
+    // that `AlreadyExists`; a stream must not be the one path that calls the
+    // identical condition `Conflict`.
+    const { target } = sink();
+    const uploaded = Promise.reject(httpError(412, 'Invalid response: 412 Precondition Failed'));
+
+    const writer = translateWriteStream(target, '/out.txt', uploaded, true).getWriter();
+    await expect(writer.close()).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'AlreadyExists' && error.path === '/out.txt',
+    );
+  });
+
+  it('narrows a 412 raised while a chunk is being written too', async () => {
+    // A server that refuses before it has the body errors the request stream
+    // instead of the acknowledgement, so the refusal surfaces from write().
+    const target = new WritableStream<Uint8Array>({
+      write() {
+        throw httpError(412, 'Invalid response: 412 Precondition Failed');
+      },
+    });
+
+    const writer = translateWriteStream(target, '/out.txt', Promise.resolve(), true).getWriter();
+    await expect(writer.write(new TextEncoder().encode('never lands'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  it('leaves a 412 as Conflict when the caller did not ask for create-only', async () => {
+    // Without `If-None-Match: *` on the request a 412 is a lost `If-Match`,
+    // which is exactly what `Conflict` means. The narrowing must key on the
+    // caller's option, not on the status alone.
+    const { target } = sink();
+    const uploaded = Promise.reject(httpError(412, 'Invalid response: 412 Precondition Failed'));
+
+    const writer = translateWriteStream(target, '/out.txt', uploaded, false).getWriter();
+    await expect(writer.close()).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Conflict',
     );
   });
 });
@@ -406,6 +450,38 @@ describe('openWriteStream', () => {
     await expect(closing).rejects.toSatisfy(
       (error: unknown) =>
         OmniFsError.is(error) && error.code === 'QuotaExceeded' && error.path === '/out.txt',
+    );
+  });
+
+  it('carries the caller overwrite: false down to the 412 translation', async () => {
+    // The wiring is the point: `overwrite: false` is what puts
+    // `If-None-Match: *` on the PUT (`createStream.js`), so it is also
+    // what decides what the 412 coming back means. This pins that the flag
+    // actually reaches `translateWriteStream` rather than being read twice and
+    // disagreeing.
+    const { client, opened } = fakeClient();
+    const writer = openWriteStream(client, target, { overwrite: false }).getWriter();
+    await writer.write(new TextEncoder().encode('body'));
+
+    const closing = writer.close();
+    await delay(20);
+    opened[0]?.stream.emit('error', httpError(412, 'Invalid response: 412'));
+    await expect(closing).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'AlreadyExists' && error.path === '/out.txt',
+    );
+  });
+
+  it('leaves a 412 as Conflict when overwriting was allowed', async () => {
+    const { client, opened } = fakeClient();
+    const writer = openWriteStream(client, target, {}).getWriter();
+    await writer.write(new TextEncoder().encode('body'));
+
+    const closing = writer.close();
+    await delay(20);
+    opened[0]?.stream.emit('error', httpError(412, 'Invalid response: 412'));
+    await expect(closing).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Conflict',
     );
   });
 });
