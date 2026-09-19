@@ -43,7 +43,13 @@ export const WEBDAV_SETTINGS_SCHEMA: SettingsSchema = {
       ],
     },
     { kind: 'text', key: 'username', label: 'Username' },
-    { kind: 'text', key: 'rootPath', label: 'Root path', placeholder: '/Documents' },
+    {
+      kind: 'text',
+      key: 'rootPrefix',
+      label: 'Root prefix',
+      placeholder: 'Documents',
+      help: 'Optional. Scopes the connection to a subfolder of the server URL.',
+    },
   ],
 };
 

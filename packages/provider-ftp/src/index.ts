@@ -49,7 +49,13 @@ export const FTP_SETTINGS_SCHEMA: SettingsSchema = {
       default: false,
       help: 'Disables TLS certificate verification. Only for servers you control.',
     },
-    { kind: 'text', key: 'rootPath', label: 'Root path', placeholder: '/public_html' },
+    {
+      kind: 'text',
+      key: 'rootPrefix',
+      label: 'Root prefix',
+      placeholder: 'public_html',
+      help: 'Optional. Scopes the connection to a subfolder of the login directory.',
+    },
   ],
 };
 

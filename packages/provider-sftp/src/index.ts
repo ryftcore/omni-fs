@@ -48,7 +48,13 @@ export const SFTP_SETTINGS_SCHEMA: SettingsSchema = {
       label: 'Private key file',
       help: 'Used when authentication is set to Private key. e.g. ~/.ssh/id_ed25519',
     },
-    { kind: 'text', key: 'rootPath', label: 'Root path', placeholder: '/var/www' },
+    {
+      kind: 'text',
+      key: 'rootPrefix',
+      label: 'Root prefix',
+      placeholder: 'var/www',
+      help: 'Optional. Scopes the connection to a subfolder of the login directory.',
+    },
   ],
 };
 
