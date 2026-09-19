@@ -25,16 +25,35 @@ export function FormRow(props: {
   readonly required?: boolean | undefined;
   readonly help?: string | undefined;
   readonly error?: string | undefined;
+  /**
+   * `inline` puts the control before its label on one line. Checkboxes use it:
+   * a fixed-size control in a stretch column gets stretched to the full row
+   * width, leaving the glyph stranded in the middle of the pane.
+   */
+  readonly inline?: boolean | undefined;
   readonly children: ReactNode;
 }): ReactNode {
   const describedBy = errorId(props.htmlFor, props.error !== undefined);
+  const label = (
+    <label htmlFor={props.htmlFor}>
+      {props.label}
+      {props.required === true ? ' *' : ''}
+    </label>
+  );
+
   return (
     <div className="omni-row">
-      <label htmlFor={props.htmlFor}>
-        {props.label}
-        {props.required === true ? ' *' : ''}
-      </label>
-      {props.children}
+      {props.inline === true ? (
+        <span className="omni-check-line">
+          {props.children}
+          {label}
+        </span>
+      ) : (
+        <>
+          {label}
+          {props.children}
+        </>
+      )}
       {props.help !== undefined && <small className="omni-help">{props.help}</small>}
       {props.error !== undefined && (
         <small className="omni-error" id={describedBy} role="alert">
@@ -110,8 +129,11 @@ export function Select(props: {
 }
 
 export function Button(props: {
-  readonly variant?: 'primary' | 'default' | undefined;
+  readonly variant?: 'primary' | 'danger' | 'default' | undefined;
   readonly disabled?: boolean | undefined;
+  readonly title?: string | undefined;
+  readonly hasPopup?: boolean | undefined;
+  readonly expanded?: boolean | undefined;
   readonly onClick: () => void;
   readonly children: ReactNode;
 }): ReactNode {
@@ -121,6 +143,9 @@ export function Button(props: {
       type="button"
       data-variant={props.variant ?? 'default'}
       disabled={props.disabled === true}
+      title={props.title}
+      aria-haspopup={props.hasPopup === true ? 'menu' : undefined}
+      aria-expanded={props.hasPopup === true ? props.expanded === true : undefined}
       onClick={props.onClick}
     >
       {props.children}
@@ -130,4 +155,18 @@ export function Button(props: {
 
 export function StatusDot(props: { readonly state: ConnectionState }): ReactNode {
   return <span className="omni-dot" data-status={props.state.status} aria-hidden="true" />;
+}
+
+/** The one place connection status is turned into words, for header and list. */
+export function statusLabel(state: ConnectionState): string {
+  switch (state.status) {
+    case 'connected':
+      return 'Connected';
+    case 'connecting':
+      return 'Connecting…';
+    case 'error':
+      return 'Error';
+    default:
+      return 'Not connected';
+  }
 }

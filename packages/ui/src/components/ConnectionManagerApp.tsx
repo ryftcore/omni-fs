@@ -14,9 +14,16 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
   const manager = useConnectionManager(props.backend);
   const { state, dispatch } = manager;
   const provider = selectedProvider(state);
+  const connection = selectedConnection(state);
 
   if (state.status === 'loading') {
-    return <div className="omni-root omni-help">Loading…</div>;
+    return (
+      <div className="omni-root">
+        <div className="omni-empty">
+          <p className="omni-help">Loading…</p>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -32,13 +39,19 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
         />
 
         {state.draft === undefined || provider === undefined ? (
-          <div className="omni-form omni-help">
-            Select a connection, or add one with a button on the left.
+          <div className="omni-pane">
+            <div className="omni-pane-body">
+              <div className="omni-empty">
+                <p className="omni-empty-title">No connection selected</p>
+                <p className="omni-help">Pick one on the left, or choose New to add a server.</p>
+              </div>
+            </div>
           </div>
         ) : (
           <ConnectionForm
             draft={state.draft}
             provider={provider}
+            connectionState={connection?.state}
             errors={state.errors}
             showErrors={state.showErrors}
             dirty={state.dirty}
@@ -46,7 +59,7 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
             saving={state.saving}
             test={state.test}
             lastError={state.lastError}
-            secretFieldsPresent={selectedConnection(state)?.secretFieldsPresent ?? []}
+            secretFieldsPresent={connection?.secretFieldsPresent ?? []}
             onLabelChange={(value) => dispatch({ type: 'labelChanged', value })}
             onFieldChange={(section, key, value) =>
               dispatch({ type: 'fieldChanged', section, key, value })
@@ -64,15 +77,13 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
       </div>
 
       {state.pendingSelection !== undefined && (
-        <div
-          className="omni-actions"
-          style={{ padding: 8, borderTop: '1px solid var(--omni-border)' }}
-        >
-          <span>Discard unsaved changes?</span>
-          <Button variant="primary" onClick={() => dispatch({ type: 'selectConfirmed' })}>
+        <div className="omni-banner" role="alertdialog" aria-label="Unsaved changes">
+          <span>This connection has unsaved changes.</span>
+          <span className="omni-spacer" />
+          <Button onClick={() => dispatch({ type: 'selectCancelled' })}>Keep editing</Button>
+          <Button variant="danger" onClick={() => dispatch({ type: 'selectConfirmed' })}>
             Discard
           </Button>
-          <Button onClick={() => dispatch({ type: 'selectCancelled' })}>Keep editing</Button>
         </div>
       )}
     </div>

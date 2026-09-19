@@ -10,15 +10,23 @@
   --omni-fg-muted: var(--vscode-descriptionForeground);
   --omni-bg: var(--vscode-editor-background);
   --omni-bg-raised: var(--vscode-button-secondaryBackground);
+  --omni-bg-sidebar: var(--vscode-sideBar-background);
+  --omni-menu-bg: var(--vscode-dropdown-background, var(--vscode-editorWidget-background));
   --omni-border: var(--vscode-panel-border);
+  --omni-hover-bg: var(--vscode-list-hoverBackground);
   --omni-input-bg: var(--vscode-input-background);
   --omni-input-fg: var(--vscode-input-foreground);
   --omni-accent: var(--vscode-button-background);
   --omni-accent-fg: var(--vscode-button-foreground);
+  --omni-accent-hover: var(--vscode-button-hoverBackground);
   --omni-error: var(--vscode-errorForeground);
   --omni-success: var(--vscode-testing-iconPassed, var(--vscode-charts-green));
   --omni-focus: var(--vscode-focusBorder);
   --omni-selection-bg: var(--vscode-list-activeSelectionBackground);
+  --omni-selection-fg: var(--vscode-list-activeSelectionForeground);
+  --omni-badge-bg: var(--vscode-badge-background);
+  --omni-badge-fg: var(--vscode-badge-foreground);
+  --omni-shadow: var(--vscode-widget-shadow);
 }
 
 body {

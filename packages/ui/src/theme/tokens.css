@@ -3,7 +3,8 @@
  *
  * Components reference only these tokens. A host remaps them - apps/vscode to
  * var(--vscode-*), the desktop app to its own palette - and that remap file is
- * the only visual coupling in the stack.
+ * the only visual coupling in the stack. The values below are the standalone
+ * fallbacks, used when a host remaps nothing.
  */
 :root {
   --omni-font: system-ui, -apple-system, 'Segoe UI', sans-serif;
@@ -12,17 +13,33 @@
   --omni-fg-muted: #656d76;
   --omni-bg: #ffffff;
   --omni-bg-raised: #f6f8fa;
+  --omni-bg-sidebar: #f6f8fa;
+  --omni-menu-bg: #ffffff;
   --omni-border: #d0d7de;
+  --omni-hover-bg: #eaeef2;
   --omni-input-bg: #ffffff;
   --omni-input-fg: #1f2328;
   --omni-accent: #0969da;
   --omni-accent-fg: #ffffff;
+  --omni-accent-hover: #0860ca;
   --omni-error: #cf222e;
   --omni-success: #1a7f37;
   --omni-focus: #0969da;
   --omni-selection-bg: #ddf4ff;
+  --omni-selection-fg: #1f2328;
+  --omni-badge-bg: #eaeef2;
+  --omni-badge-fg: #656d76;
+  --omni-shadow: rgba(31, 35, 40, 0.15);
   --omni-radius: 4px;
   --omni-gap: 8px;
+}
+
+/* Scoped reset: every width below is stated as a border-box width. */
+.omni-root,
+.omni-root *,
+.omni-root *::before,
+.omni-root *::after {
+  box-sizing: border-box;
 }
 
 .omni-root {
@@ -41,48 +58,334 @@
   min-height: 0;
 }
 
+/* ---------------------------------------------------------------------------
+ * Left rail: header, scrolling list, footer. Each is a flex child, so the
+ * list scrolls between two fixed bands rather than pushing them off-screen.
+ * ------------------------------------------------------------------------ */
+
 .omni-list {
-  width: 220px;
+  width: 260px;
+  flex: none;
+  background: var(--omni-bg-sidebar);
   border-right: 1px solid var(--omni-border);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+
+.omni-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--omni-gap);
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--omni-border);
+}
+
+.omni-list-title {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--omni-fg-muted);
+}
+
+.omni-list-scroll {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  list-style: none;
+  margin: 0;
+  padding: 4px 0;
 }
 
 .omni-list-item {
   display: flex;
   align-items: center;
-  gap: var(--omni-gap);
-  padding: 6px 10px;
+  gap: 10px;
+  width: 100%;
+  padding: 7px 12px;
   border: none;
+  border-left: 2px solid transparent;
   background: none;
   color: inherit;
   font: inherit;
   text-align: left;
   cursor: pointer;
-  width: 100%;
+}
+
+.omni-list-item:hover {
+  background: var(--omni-hover-bg);
 }
 
 .omni-list-item[aria-current='true'] {
   background: var(--omni-selection-bg);
+  color: var(--omni-selection-fg);
+  border-left-color: var(--omni-accent);
 }
 
-.omni-form {
+.omni-list-item-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.omni-list-item-label,
+.omni-list-item-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omni-list-item-meta {
+  font-size: 11px;
+  color: var(--omni-fg-muted);
+}
+
+.omni-list-item[aria-current='true'] .omni-list-item-meta {
+  color: inherit;
+  opacity: 0.8;
+}
+
+.omni-list-footer {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--omni-border);
+}
+
+.omni-empty {
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.omni-empty-title {
+  margin: 0 0 4px;
+  font-weight: 600;
+}
+
+.omni-empty p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * The "New" menu. A backdrop element closes it on an outside click, so no
+ * document-level listener is needed and the component keeps no effects.
+ * ------------------------------------------------------------------------ */
+
+.omni-menu-anchor {
+  position: relative;
+}
+
+.omni-menu-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+}
+
+.omni-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 11;
+  min-width: 190px;
+  padding: 4px;
+  background: var(--omni-menu-bg);
+  border: 1px solid var(--omni-border);
+  border-radius: var(--omni-radius);
+  box-shadow: 0 4px 12px var(--omni-shadow);
+}
+
+.omni-menu-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 2px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.omni-menu-item:hover {
+  background: var(--omni-hover-bg);
+}
+
+/* ---------------------------------------------------------------------------
+ * Right pane: sticky header, scrolling body, sticky action footer.
+ * ------------------------------------------------------------------------ */
+
+.omni-pane {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.omni-pane-header {
+  flex: none;
+  border-bottom: 1px solid var(--omni-border);
+}
+
+/* Header, form and footer all centre the same 720px column with the same
+   inner padding, so their contents share one left and right edge. */
+.omni-pane-inner {
+  max-width: 720px;
+  margin: 0 auto;
+}
+
+.omni-pane-header .omni-pane-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Wraps rather than crushing the title to nothing in a split editor. */
+  flex-wrap: wrap;
+  gap: 4px var(--omni-gap);
+  padding: 12px 24px;
+}
+
+.omni-pane-heading {
+  display: flex;
+  align-items: center;
+  gap: var(--omni-gap);
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.omni-pane-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omni-pane-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  color: var(--omni-fg-muted);
+}
+
+.omni-pane-body {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
-  padding: 16px;
-  max-width: 560px;
+}
+
+.omni-pane-footer {
+  flex: none;
+  border-top: 1px solid var(--omni-border);
+  background: var(--omni-bg);
+}
+
+.omni-pane-footer .omni-pane-inner {
+  padding: 10px 24px;
+}
+
+.omni-footer-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--omni-gap);
+}
+
+.omni-spacer {
+  flex: 1;
+}
+
+.omni-status-strip {
+  margin-bottom: 8px;
+}
+
+.omni-status-strip p {
+  margin: 0;
+}
+
+/* ---------------------------------------------------------------------------
+ * Form
+ * ------------------------------------------------------------------------ */
+
+.omni-form {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 20px 24px 28px;
+}
+
+.omni-group {
+  margin-bottom: 28px;
+}
+
+.omni-group:last-child {
+  margin-bottom: 0;
+}
+
+.omni-group-title {
+  margin: 0 0 2px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--omni-border);
+  color: var(--omni-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.omni-group-note {
+  margin: 8px 0 0;
 }
 
 .omni-row {
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: 4px;
-  margin-bottom: 12px;
+  margin-top: 14px;
 }
 
 .omni-row label {
   color: var(--omni-fg-muted);
+}
+
+/* A checkbox is a fixed-size control. In the stretch column above it would be
+   stretched to the row's width, with the glyph painted in the middle of the
+   pane - so checkbox rows lay out horizontally, box first. */
+.omni-check-line {
+  display: flex;
+  align-items: center;
+  gap: var(--omni-gap);
+}
+
+.omni-check-line input[type='checkbox'] {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--omni-accent);
+}
+
+.omni-check-line label {
+  color: var(--omni-fg);
+  cursor: pointer;
+}
+
+/* An input paired with a button: Browse… for a key file, Clear for a secret. */
+.omni-field-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.omni-field-group .omni-input {
+  flex: 1;
+  min-width: 0;
 }
 
 .omni-input,
@@ -92,14 +395,19 @@
   background: var(--omni-input-bg);
   border: 1px solid var(--omni-border);
   border-radius: var(--omni-radius);
-  padding: 4px 6px;
+  padding: 5px 8px;
   width: 100%;
-  box-sizing: border-box;
+}
+
+.omni-input[readonly] {
+  color: var(--omni-fg-muted);
+  background: var(--omni-bg-raised);
 }
 
 .omni-input:focus-visible,
 .omni-select:focus-visible,
 .omni-button:focus-visible,
+.omni-menu-item:focus-visible,
 .omni-list-item:focus-visible {
   outline: 1px solid var(--omni-focus);
   outline-offset: 1px;
@@ -117,14 +425,32 @@
   color: var(--omni-fg-muted);
 }
 
+.omni-badge {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--omni-badge-bg);
+  color: var(--omni-badge-fg);
+  font-size: 11px;
+}
+
+/* ---------------------------------------------------------------------------
+ * Controls
+ * ------------------------------------------------------------------------ */
+
 .omni-button {
   font: inherit;
   border: 1px solid var(--omni-border);
   border-radius: var(--omni-radius);
   background: var(--omni-bg-raised);
   color: var(--omni-fg);
-  padding: 4px 12px;
+  padding: 5px 12px;
   cursor: pointer;
+  white-space: nowrap;
+}
+
+.omni-button:hover:not(:disabled) {
+  background: var(--omni-hover-bg);
 }
 
 .omni-button[data-variant='primary'] {
@@ -133,15 +459,19 @@
   border-color: var(--omni-accent);
 }
 
+.omni-button[data-variant='primary']:hover:not(:disabled) {
+  background: var(--omni-accent-hover);
+}
+
+.omni-button[data-variant='danger']:hover:not(:disabled) {
+  background: var(--omni-error);
+  border-color: var(--omni-error);
+  color: var(--omni-accent-fg);
+}
+
 .omni-button:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.omni-actions {
-  display: flex;
-  gap: var(--omni-gap);
-  margin-top: 16px;
 }
 
 .omni-dot {
@@ -156,16 +486,25 @@
   background: var(--omni-success);
 }
 
+.omni-dot[data-status='connecting'] {
+  background: var(--omni-accent);
+}
+
 .omni-dot[data-status='error'] {
   background: var(--omni-error);
 }
 
-.omni-section-heading {
-  margin: 20px 0 8px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--omni-border);
-  color: var(--omni-fg-muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  font-size: 11px;
+/* The unsaved-changes guard, raised above the footer it replaces. */
+.omni-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--omni-gap);
+  padding: 10px 24px;
+  border-top: 1px solid var(--omni-border);
+  background: var(--omni-bg-raised);
+}
+
+/* The pane's own empty state sits below the header band, not against it. */
+.omni-pane-body > .omni-empty {
+  padding-top: 15vh;
 }

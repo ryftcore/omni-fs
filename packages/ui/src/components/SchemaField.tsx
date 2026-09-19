@@ -30,7 +30,7 @@ export function SchemaField(props: {
         );
       case 'file':
         return (
-          <span className="omni-actions">
+          <span className="omni-field-group">
             <TextField
               id={id}
               type="text"
@@ -43,7 +43,7 @@ export function SchemaField(props: {
         );
       case 'password':
         return (
-          <span className="omni-actions">
+          <span className="omni-field-group">
             <TextField
               id={id}
               type="password"
@@ -78,6 +78,7 @@ export function SchemaField(props: {
       required={view.required}
       help={view.help}
       error={view.error}
+      inline={control.kind === 'checkbox'}
     >
       {inner}
     </FormRow>

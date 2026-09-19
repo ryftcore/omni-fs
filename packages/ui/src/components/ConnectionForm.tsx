@@ -1,6 +1,7 @@
-import type { ReactNode } from 'react';
+import { useEffect, useRef, type ReactNode } from 'react';
 import type {
   ConnectionDraft,
+  ConnectionState,
   DraftSection,
   FieldError,
   ProviderSummary,
@@ -8,12 +9,21 @@ import type {
 } from '@omni-fs/core';
 import { fieldView } from '../model/field-view.js';
 import type { TestState } from '../model/reducer.js';
-import { Button, Checkbox, errorId, FormRow, TextField } from './primitives/index.js';
+import {
+  Button,
+  Checkbox,
+  errorId,
+  FormRow,
+  StatusDot,
+  statusLabel,
+  TextField,
+} from './primitives/index.js';
 import { SchemaField } from './SchemaField.js';
 
 export function ConnectionForm(props: {
   readonly draft: ConnectionDraft;
   readonly provider: ProviderSummary;
+  readonly connectionState: ConnectionState | undefined;
   readonly errors: readonly FieldError[];
   readonly showErrors: boolean;
   readonly dirty: boolean;
@@ -55,83 +65,179 @@ export function ConnectionForm(props: {
       />
     ));
 
+  // Switching connections must start at the top of the form. The body is the
+  // scroll container, so without this the next connection opens at whatever
+  // offset the previous one was left at.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const draftKey = props.draft.id ?? `new:${props.draft.providerId}`;
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (body !== null) body.scrollTop = 0;
+  }, [draftKey]);
+
+  const labelError = errorFor('label', 'label');
+  const trimmed = props.draft.label.trim();
+  const title =
+    trimmed !== '' ? trimmed : props.draft.id === undefined ? 'New connection' : 'Untitled';
+  const hasStatusStrip = props.test.kind === 'done' || props.lastError !== undefined;
+
   return (
-    <div className="omni-form">
-      <FormRow
-        label="Name"
-        htmlFor="omni-label"
-        required
-        error={errorFor('label', 'label')?.message}
-      >
-        <TextField
-          id="omni-label"
-          type="text"
-          value={props.draft.label}
-          placeholder="production-bucket"
-          invalid={errorFor('label', 'label') !== undefined}
-          describedBy={errorId('omni-label', errorFor('label', 'label') !== undefined)}
-          onChange={props.onLabelChange}
-        />
-      </FormRow>
+    <div className="omni-pane">
+      <header className="omni-pane-header">
+        <div className="omni-pane-inner">
+          <div className="omni-pane-heading">
+            <h1 className="omni-pane-title">{title}</h1>
+            <span className="omni-badge">{props.provider.displayName}</span>
+          </div>
+          {props.connectionState !== undefined && (
+            <span className="omni-pane-status">
+              <StatusDot state={props.connectionState} />
+              {statusLabel(props.connectionState)}
+            </span>
+          )}
+        </div>
+      </header>
 
-      <FormRow label="Protocol" htmlFor="omni-protocol">
-        {/* Locked after the first save: changing it would invalidate every
-            settings field at once. Duplicate is the path to "same server,
-            different protocol". */}
-        <TextField
-          id="omni-protocol"
-          type="text"
-          value={props.provider.displayName}
-          readOnly
-          onChange={() => undefined}
-        />
-      </FormRow>
+      <div className="omni-pane-body" ref={bodyRef}>
+        <div className="omni-form">
+          <Group title="Connection">
+            <FormRow label="Name" htmlFor="omni-label" required error={labelError?.message}>
+              <TextField
+                id="omni-label"
+                type="text"
+                value={props.draft.label}
+                placeholder="production-bucket"
+                invalid={labelError !== undefined}
+                describedBy={errorId('omni-label', labelError !== undefined)}
+                onChange={props.onLabelChange}
+              />
+            </FormRow>
 
-      <h2 className="omni-section-heading">Settings</h2>
-      {renderSection(props.provider.settingsSchema.fields, 'settings')}
+            <FormRow
+              label="Protocol"
+              htmlFor="omni-protocol"
+              help="Locked after the first save. Use Duplicate for the same server on another protocol."
+            >
+              {/* Changing it would invalidate every settings field at once. */}
+              <TextField
+                id="omni-protocol"
+                type="text"
+                value={props.provider.displayName}
+                readOnly
+                onChange={() => undefined}
+              />
+            </FormRow>
+          </Group>
 
-      <FormRow label="Root path" htmlFor="omni-root" help="Folder to treat as the connection root.">
-        <TextField
-          id="omni-root"
-          type="text"
-          value={props.draft.rootPath}
-          onChange={props.onRootPathChange}
-        />
-      </FormRow>
+          {props.provider.settingsSchema.fields.length > 0 && (
+            <Group title="Settings">
+              {renderSection(props.provider.settingsSchema.fields, 'settings')}
+            </Group>
+          )}
 
-      <FormRow label="Read only" htmlFor="omni-readonly">
-        <Checkbox
-          id="omni-readonly"
-          checked={props.draft.readOnly}
-          onChange={props.onReadOnlyChange}
-        />
-      </FormRow>
+          {props.provider.secretSchema.fields.length > 0 && (
+            <Group
+              title="Credentials"
+              note="Stored in your operating system's keychain, never in settings.json."
+            >
+              {renderSection(props.provider.secretSchema.fields, 'secret')}
+            </Group>
+          )}
 
-      <h2 className="omni-section-heading">Credentials (stored in the OS keychain)</h2>
-      {renderSection(props.provider.secretSchema.fields, 'secret')}
+          <Group title="Advanced">
+            <FormRow
+              label="Root path"
+              htmlFor="omni-root"
+              help="Folder to treat as the connection root."
+            >
+              <TextField
+                id="omni-root"
+                type="text"
+                value={props.draft.rootPath}
+                onChange={props.onRootPathChange}
+              />
+            </FormRow>
 
-      <div className="omni-actions">
-        <Button disabled={props.test.kind === 'running'} onClick={props.onTest}>
-          {props.test.kind === 'running' ? 'Testing…' : 'Test Connection'}
-        </Button>
-        <Button disabled={!props.dirty} onClick={props.onRevert}>
-          Revert
-        </Button>
-        <Button variant="primary" disabled={props.saving || !props.canSave} onClick={props.onSave}>
-          {props.saving ? 'Saving…' : 'Save'}
-        </Button>
-        <Button disabled={props.draft.id === undefined || props.dirty} onClick={props.onConnect}>
-          Connect
-        </Button>
+            <FormRow
+              label="Open as read-only"
+              htmlFor="omni-readonly"
+              help="Blocks writes, renames and deletes for this connection."
+              inline
+            >
+              <Checkbox
+                id="omni-readonly"
+                checked={props.draft.readOnly}
+                onChange={props.onReadOnlyChange}
+              />
+            </FormRow>
+          </Group>
+        </div>
       </div>
 
-      <TestReport test={props.test} />
-      {props.lastError !== undefined && (
-        <p className="omni-error" role="alert">
-          {props.lastError}
-        </p>
-      )}
+      {/* Outside the scroll container: on a long schema the actions would
+          otherwise sit below the fold. */}
+      <footer className="omni-pane-footer">
+        <div className="omni-pane-inner">
+          {hasStatusStrip && (
+            <div className="omni-status-strip">
+              <TestReport test={props.test} />
+              {props.lastError !== undefined && (
+                <p className="omni-error" role="alert">
+                  {props.lastError}
+                </p>
+              )}
+            </div>
+          )}
+
+          <div className="omni-footer-actions">
+            <Button disabled={props.test.kind === 'running'} onClick={props.onTest}>
+              {props.test.kind === 'running' ? 'Testing…' : 'Test Connection'}
+            </Button>
+            {props.dirty && <span className="omni-help">Unsaved changes</span>}
+
+            <span className="omni-spacer" />
+
+            <Button disabled={!props.dirty} onClick={props.onRevert}>
+              Revert
+            </Button>
+            <Button
+              variant="primary"
+              disabled={props.saving || !props.canSave}
+              onClick={props.onSave}
+            >
+              {props.saving ? 'Saving…' : 'Save'}
+            </Button>
+            <Button
+              disabled={props.draft.id === undefined || props.dirty}
+              title={
+                props.draft.id === undefined
+                  ? 'Save the connection first.'
+                  : props.dirty
+                    ? 'Save your changes first.'
+                    : undefined
+              }
+              onClick={props.onConnect}
+            >
+              Connect
+            </Button>
+          </div>
+        </div>
+      </footer>
     </div>
+  );
+}
+
+function Group(props: {
+  readonly title: string;
+  readonly note?: string | undefined;
+  readonly children: ReactNode;
+}): ReactNode {
+  return (
+    <section className="omni-group">
+      <h2 className="omni-group-title">{props.title}</h2>
+      {props.note !== undefined && <p className="omni-group-note omni-help">{props.note}</p>}
+      {props.children}
+    </section>
   );
 }
 
