@@ -79,7 +79,7 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
   });
 
   // 4. VS Code surfaces.
-  const fileSystemProvider = new OmniFileSystemProvider({ manager, cache, logger });
+  const fileSystemProvider = new OmniFileSystemProvider({ manager, configStore, cache, logger });
   const connectionsTree = new ConnectionsTreeProvider({ manager, configStore, registry, cache });
   const transfersTree = new TransfersTreeProvider(transfers);
 

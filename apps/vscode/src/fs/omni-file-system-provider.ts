@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { OmniFsError, RemotePath } from '@omni-fs/core';
 import type {
+  ConfigStore,
   ConnectionManager,
   DirEntry,
   EntryCache,
@@ -27,6 +28,7 @@ export const OMNI_FS_SCHEME = 'omnifs';
  */
 export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode.Disposable {
   readonly #manager: ConnectionManager;
+  readonly #configStore: ConfigStore;
   readonly #cache: EntryCache;
   readonly #logger: Logger;
   readonly #wrapped = new WeakMap<RemoteFileSystem, ManagedFileSystem>();
@@ -34,8 +36,14 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
 
   readonly onDidChangeFile = this.#emitter.event;
 
-  constructor(options: { manager: ConnectionManager; cache: EntryCache; logger: Logger }) {
+  constructor(options: {
+    manager: ConnectionManager;
+    configStore: ConfigStore;
+    cache: EntryCache;
+    logger: Logger;
+  }) {
     this.#manager = options.manager;
+    this.#configStore = options.configStore;
     this.#cache = options.cache;
     this.#logger = options.logger;
   }
@@ -173,11 +181,21 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
     // connection is replaced.
     let managed = this.#wrapped.get(raw);
     if (managed === undefined) {
+      // The connection's own read-only flag. `#resolve` has only the id, so
+      // this is the one place the config can be reached — and without it the
+      // lock shown in the tree does nothing: ManagedFileSystem implements
+      // read-only properly and was simply never told.
+      //
+      // Read when the wrapper is built, which is memoised per live provider
+      // instance, so a change to the flag takes effect on the next connect.
+      // That is how every other connection setting already behaves.
+      const config = await this.#configStore.get(connectionId);
       managed = new ManagedFileSystem({
         connectionId,
         inner: raw,
         cache: this.#cache,
         logger: this.#logger.child(connectionId),
+        readOnly: config?.readOnly ?? false,
       });
       this.#wrapped.set(raw, managed);
     }

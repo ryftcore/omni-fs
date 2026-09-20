@@ -183,3 +183,70 @@ suite('workspace.fs over omnifs://', () => {
     );
   });
 });
+
+const READ_ONLY_ID = 'omnifs-test-read-only';
+
+suite('a connection saved with readOnly: true', () => {
+  let connection: TestConnection;
+
+  suiteSetup(async () => {
+    const api = await activateExtension();
+    connection = await connectMemory({
+      api,
+      id: READ_ONLY_ID,
+      readOnly: true,
+      seed: { '/readme.txt': 'untouched' },
+    });
+  });
+
+  suiteTeardown(async () => {
+    await connection?.dispose();
+  });
+
+  test('still reads', async () => {
+    // Read-only has to mean read-only, not broken.
+    assert.equal(
+      text(await vscode.workspace.fs.readFile(connection.uri('/readme.txt'))),
+      'untouched',
+    );
+    assert.equal(
+      (await vscode.workspace.fs.stat(connection.uri('/readme.txt'))).type,
+      vscode.FileType.File,
+    );
+  });
+
+  // `async` for the same reason as every other block in this file: these are
+  // handed to `assert.rejects`, which takes a real `Promise` and not the
+  // `Thenable` that `workspace.fs` returns.
+  const refusals: readonly [string, () => Promise<unknown>][] = [
+    [
+      'writeFile',
+      async () => vscode.workspace.fs.writeFile(connection.uri('/readme.txt'), bytes('nope')),
+    ],
+    ['delete', async () => vscode.workspace.fs.delete(connection.uri('/readme.txt'))],
+    [
+      'rename',
+      async () =>
+        vscode.workspace.fs.rename(connection.uri('/readme.txt'), connection.uri('/moved.txt')),
+    ],
+    [
+      'createDirectory',
+      async () => vscode.workspace.fs.createDirectory(connection.uri('/new-folder')),
+    ],
+  ];
+
+  for (const [name, call] of refusals) {
+    test(`refuses ${name} as NoPermissions`, async () => {
+      // NoPermissions is the code that makes VS Code show a read-only editor
+      // rather than a failed save, which is the whole point of the flag.
+      await assert.rejects(call, (error: unknown) => isFileSystemError(error, 'NoPermissions'));
+    });
+  }
+
+  test('leaves the file exactly as it was', async () => {
+    assert.equal(
+      text(await vscode.workspace.fs.readFile(connection.uri('/readme.txt'))),
+      'untouched',
+    );
+  });
+});
