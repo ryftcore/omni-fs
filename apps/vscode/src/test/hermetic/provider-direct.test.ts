@@ -9,7 +9,7 @@ import {
   OmniFsError,
   ProviderRegistry,
 } from '@omni-fs/core';
-import type { FileStat, RemotePath } from '@omni-fs/core';
+import type { ConnectionConfig, FileStat, RemotePath } from '@omni-fs/core';
 import { MemoryFileSystem, memoryProvider } from '@omni-fs/testing';
 import { OmniFileSystemProvider } from '../../fs/omni-file-system-provider.js';
 import { bytes, isFileSystemError, text } from '../helpers.js';
@@ -44,8 +44,24 @@ class StubFileSystem extends MemoryFileSystem {
   }
 }
 
+/** An InMemoryConfigStore whose `get` can be made to fail from a point on. */
+class StubConfigStore extends InMemoryConfigStore {
+  #failure: OmniFsError | undefined;
+
+  failGet(error: OmniFsError): void {
+    this.#failure = error;
+  }
+
+  override async get(id: string): Promise<ConnectionConfig | undefined> {
+    if (this.#failure !== undefined) throw this.#failure;
+    return super.get(id);
+  }
+}
+
 interface Harness {
   readonly provider: OmniFileSystemProvider;
+  readonly manager: ConnectionManager;
+  readonly configStore: StubConfigStore;
   readonly disk: StubFileSystem;
   uri(path: string): vscode.Uri;
   /** Every change event fired since construction, flattened and in order. */
@@ -60,7 +76,7 @@ async function harness(seed: Readonly<Record<string, string>> = {}): Promise<Har
   const registry = new ProviderRegistry();
   registry.register({ ...memoryProvider, id: ID, schemes: [ID], create: () => disk });
 
-  const configStore = new InMemoryConfigStore();
+  const configStore = new StubConfigStore();
   await configStore.save({ id: ID, providerId: ID, label: ID, settings: {} });
 
   const manager = new ConnectionManager({
@@ -84,6 +100,8 @@ async function harness(seed: Readonly<Record<string, string>> = {}): Promise<Har
 
   return {
     provider,
+    manager,
+    configStore,
     disk,
     uri: (path: string) => vscode.Uri.from({ scheme: 'omnifs', authority: ID, path }),
     events,
@@ -286,6 +304,30 @@ suite('OmniFileSystemProvider, constructed directly', () => {
       assert.deepEqual(
         fixture.events.map((event) => event.type),
         [vscode.FileChangeType.Created],
+      );
+    });
+  });
+
+  suite('resolving a connection', () => {
+    test('a config-store failure reaches VS Code translated', async () => {
+      // `#resolve` reads the connection's read-only flag from the ConfigStore
+      // once the connection is live. `VsCodeConfigStore` cannot fail there —
+      // it is a settings lookup — but a ConfigStore is a core Port, and the
+      // desktop host's will do real I/O. An OmniFsError arriving untranslated
+      // is a raw error in a notification instead of something the editor can
+      // act on, which is the same bug `manager.acquire` already guards.
+      const fixture = await start({ '/present.txt': 'x' });
+      // Connect first: `acquire` then answers from its live map without
+      // consulting the ConfigStore, so the only call left is the one under
+      // test.
+      await fixture.manager.acquire(ID);
+      fixture.configStore.failGet(
+        new OmniFsError({ code: 'Timeout', message: 'settings backend stopped responding' }),
+      );
+
+      await assert.rejects(
+        () => fixture.provider.stat(fixture.uri('/present.txt')),
+        (error: unknown) => isFileSystemError(error, 'Unavailable'),
       );
     });
   });

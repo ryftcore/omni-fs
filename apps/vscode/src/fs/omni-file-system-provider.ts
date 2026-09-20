@@ -218,7 +218,14 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
       // Read when the wrapper is built, which is memoised per live provider
       // instance, so a change to the flag takes effect on the next connect.
       // That is how every other connection setting already behaves.
-      const config = await this.#configStore.get(connectionId);
+      //
+      // Translated like `acquire` above. `VsCodeConfigStore` reads a setting
+      // and cannot fail, but `ConfigStore` is a core Port and the desktop
+      // host's will do real I/O — an untranslated throw from here reaches the
+      // editor as a raw Error rather than a FileSystemError.
+      const config = await this.#configStore.get(connectionId).catch((error: unknown) => {
+        throw toVsCodeError(error, uri);
+      });
       managed = new ManagedFileSystem({
         connectionId,
         inner: raw,
