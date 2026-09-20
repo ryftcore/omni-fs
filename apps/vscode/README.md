@@ -5,9 +5,12 @@
 Open a remote file, edit it, press <kbd>Ctrl</kbd>+<kbd>S</kbd>. That's it. No
 download, no re-upload, no separate window.
 
-> **Beta (`0.1.0-beta.1`).** The S3 provider is implemented and usable. FTP,
-> SFTP and WebDAV are scaffolded but not yet functional. Read
-> [Status](#status) and the [changelog](CHANGELOG.md) before installing.
+![Browsing an S3 bucket and editing a remote file in a normal VS Code editor](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/browse-and-edit.png)
+
+> **Beta (`0.1.0-beta.1`).** The published build ships the S3 provider alone.
+> SFTP and WebDAV are implemented on `main` and will land in the next release;
+> FTP is still scaffolding. Read [Status](#status) and the
+> [changelog](CHANGELOG.md) before installing.
 
 ## What it does
 
@@ -27,15 +30,21 @@ download, no re-upload, no separate window.
 
 ## Status
 
-| Protocol               | Status                | Notes                                                                 |
-| ---------------------- | --------------------- | --------------------------------------------------------------------- |
-| **S3 / S3-compatible** | ✅ Implemented        | AWS S3, MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Ceph |
-| **FTP / FTPS**         | 🚧 Not yet functional | Explicit and implicit TLS planned                                     |
-| **SFTP (SSH)**         | 🚧 Not yet functional | Password, private key, SSH agent planned                              |
-| **WebDAV**             | 🚧 Not yet functional | Nextcloud, ownCloud planned                                           |
+| Protocol               | Status                     | Notes                                                                 |
+| ---------------------- | -------------------------- | --------------------------------------------------------------------- |
+| **S3 / S3-compatible** | ✅ Implemented, published  | AWS S3, MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Ceph |
+| **SFTP (SSH)**         | ✅ Implemented, unreleased | Password, private key, SSH agent                                      |
+| **WebDAV**             | ✅ Implemented, unreleased | Nextcloud, ownCloud                                                   |
+| **FTP / FTPS**         | 🚧 Scaffolded              | Explicit and implicit TLS planned                                     |
+
+"Unreleased" means the provider passes the shared conformance suite against a
+real server but is not in `0.1.0-beta.1` yet; the screenshots on this page are
+taken from `main`.
 
 Download and upload commands are also not wired up yet. Everything else listed
-above works against S3.
+above works against every implemented protocol.
+
+![The same sidebar browsing S3, SFTP and WebDAV side by side](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/protocols.png)
 
 ## Getting started
 
@@ -43,6 +52,8 @@ above works against S3.
 2. Click **Add Connection** and pick a protocol.
 3. Fill in the settings, then the credentials.
 4. Click **Connect**.
+
+![The connection manager with an S3-compatible connection selected](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/connections.png)
 
 To work in a remote folder as if it were local, right-click the connection and
 choose **Open as Workspace Folder**.
@@ -68,6 +79,8 @@ for keeping a production connection pointed at exactly one deploy directory.
 Credentials go to your operating system's keychain — Keychain on macOS, DPAPI on
 Windows, libsecret on Linux — through VS Code's secret storage. They are never
 written to a settings file.
+
+![The credentials section of a connection, noting that secrets are stored in the OS keychain](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/credentials.png)
 
 Connection _settings_ (endpoint, bucket, host, username) live in the
 `omniFs.connections` setting, which contains no secrets and is safe to commit to

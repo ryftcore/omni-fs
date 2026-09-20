@@ -24,3 +24,8 @@ out/**/*.map
 # Source for the marketplace icon; only resources/icon.png is shipped.
 # Regenerate with: rsvg-convert -w 128 -h 128 resources/icon.svg -o resources/icon.png
 resources/icon.svg
+
+# README screenshots. The Marketplace ignores relative image paths, so README.md
+# links these over raw.githubusercontent.com and the files are never read from
+# the package — shipping them would spend most of the 2 MB budget on pixels.
+media/**
