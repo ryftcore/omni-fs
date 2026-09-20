@@ -410,7 +410,11 @@ import { build, context } from 'esbuild';
  */
 const watch = process.argv.includes('--watch');
 const production = process.argv.includes('--production');
-const withTests = process.argv.includes('--tests');
+// `--tests-only` builds the test bundle alone, so `build:tests` never writes
+// `out/`, which is `build`'s declared output, not `build:tests`'. `--tests`
+// still builds all three, for the F5 watch loop.
+const testsOnly = process.argv.includes('--tests-only');
+const withTests = testsOnly || process.argv.includes('--tests');
 
 const shared = {
   bundle: true,
@@ -507,7 +511,11 @@ const tests = {
   minify: false,
 };
 
-const targets = withTests ? [extension, webview, tests] : [extension, webview];
+const targets = testsOnly
+  ? [tests]
+  : withTests
+    ? [extension, webview, tests]
+    : [extension, webview];
 
 if (watch) {
   const contexts = await Promise.all(targets.map((target) => context(target)));
@@ -668,7 +676,7 @@ In `apps/vscode/package.json`, replace `dev` and `typecheck` and add three scrip
 ```json
     "dev": "node esbuild.mjs --watch --tests",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit && tsc -p tsconfig.test.json --noEmit",
-    "build:tests": "node esbuild.mjs --tests",
+    "build:tests": "node esbuild.mjs --tests-only",
     "test:extension": "vscode-test --label hermetic",
     "test:extension:live": "vscode-test --label live",
 ```
@@ -3076,3 +3084,49 @@ git commit -m ":memo: docs describe the extension test suite and its two labels"
 - `pnpm typecheck` runs three programs for `apps/vscode`, and `"mocha"` appears in none of the other two.
 - `pnpm lint`, `pnpm format:check` and both CI boundary greps are clean.
 - `docs/superpowers/specs/2026-09-20-vscode-extension-tests-design.md` has no goal without a test, and every non-goal in it is still absent from the code.
+
+---
+
+## Execution notes
+
+All ten tasks in this plan were executed, each through an implement → review → fix cycle. The review loop found real defects along the way, so what shipped differs from what the plan above specifies in the ways recorded below. The plan above is intent; this section is what happened.
+
+### `--tests` became `--tests-only`
+
+Task 3's `esbuild.mjs` gives the test build a single `--tests` flag that selects all three build targets, and Step 6 wires that same flag into the `build:tests` package.json script. Selecting all three writes `out/` — which turbo declares as the `build` task's output, not `build:tests`'s — so `build:tests` run standalone races `build` and can clobber the production bundle. What shipped: `--tests-only` selects the test target alone; `--tests` still exists and still selects all three, for the F5 watch loop. This is actively harmful if followed as written, so it has been corrected inline above rather than only noted here: the flag definition and `targets` selection in Task 3 Step 2, and the `build:tests` script line in Task 3 Step 6, now read `--tests-only`. Fixing only the Step 6 wiring would not have removed the hazard — the Step 2 code as originally written recognizes no `--tests-only` flag at all, so an unrecognized argument would still default to building `[extension, webview]` into `out/` — so both places were corrected together.
+
+### `test:extension:live` does not depend on `build`
+
+The plan gives both extension-test turbo tasks the same `dependsOn: ["build", "build:tests"]`. What shipped: the hermetic label keeps that pair, but the live label depends on `["build:tests"]` alone. `turbo.json` carries the reason in a comment: the live label's whole claim is about the artifact that ships, so it runs against the minified bundle `package` left in `out/`; an edge to `build` would overwrite that with a dev bundle and the run would prove something else. The hermetic label makes no such claim, so a dev bundle is fine there.
+
+### The `package` turbo task is `cache: false`
+
+Not in the plan — the plan's `turbo.json` changes touch only `build:tests`, `test:extension` and `test:extension:live`, and never mention `package`. Found during Task 9: `package` declared only `outputs: ["*.vsix"]`, so a cache hit replayed the `.vsix` and skipped the script's `rm -rf out && esbuild --production`, leaving whatever dev bundle `build` had last written in `out/` — which is exactly what the live label then tested. Measured before/after: `FULL TURBO` in 12ms leaving a 2.8 MB dev bundle, versus 948ms and a 1.17 MB minified bundle once `cache: false` was added.
+
+### `out-test/` is emptied on every test build
+
+Not in the plan. `esbuild.mjs` now runs `rmSync('out-test', { recursive: true, force: true })` before any build that includes the test target. esbuild writes into an `outdir` without emptying it first, so without this a deleted or renamed test file left its old bundle behind and `vscode-test`'s glob kept running it — a test that no longer existed, still reporting green.
+
+### `.vscodeignore` gained entries
+
+Task 3's `esbuild.mjs` section asserts "Nothing under `out-test/` is inside the packaged extension, so `.vscodeignore` needs no entry for it." That was verified false with `vsce ls --no-dependencies`. What shipped: `out-test/**` and `.vscode-test.mjs` are excluded, and the plan's two-line `tsconfig.json` / `tsconfig.webview.json` entry was collapsed to the glob `tsconfig*.json` so the plan's own new `tsconfig.test.json` is covered too. This claim is inaccurate but not actively harmful — a slightly oversized `.vsix` on a clean checkout, not a broken one — so it was left as written above and is only corrected here.
+
+### `eslint.config.mjs` gained ignores
+
+Not in the plan. `eslint .` does not read `.gitignore`; the explicit `ignores` array in `eslint.config.mjs` is the whole story. The editor `vscode-test` downloads into `apps/vscode/.vscode-test/` ships its own bundled `tsconfig.json` files, which made typescript-eslint's project-root inference ambiguous and failed 285 files across the repo; `out-test/**`, the generated esbuild test bundles, was added alongside it since `**/out/**` does not match `out-test`.
+
+### The live Mocha timeout is 90s, not 60s
+
+The plan sets the live label's Mocha timeout and the live suite's own server-readiness deadline (`WRITABLE_BUDGET_MS`) to the same 60 seconds. At that value the two race and Mocha wins, so a stopped server reported `Timeout of 60000ms exceeded` instead of naming which server was down — the readiness check exists specifically to say that. `.vscode-test.mjs`'s live `mocha.timeout` was raised to 90s so the suite's own assertion always fires first; `WRITABLE_BUDGET_MS` stayed at 60s.
+
+### `testEntryPoints()` throws on an empty match
+
+Not in the plan, added in Task 10. `@vscode/test-cli` treats a `files` glob matching no file as a run that passed, and esbuild accepts an empty `entryPoints` without complaint, so renaming or emptying `src/test/hermetic/` or `src/test/live/` would have made both CI jobs report green having run nothing — and the live job's production-bundle guard is itself one of the files that glob would stop matching. `testEntryPoints()` now throws if `src/test` yields no `*.test.ts` files.
+
+### The editor cache key includes `github.job`
+
+The plan's key is `vscode-test-${{ runner.os }}-${{ steps.stamp.outputs.week }}`. Both Linux jobs — the hermetic matrix leg and the live job — resolve `runner.os` to the same value, so they would save the same key concurrently, producing a guaranteed `ReserveCacheError` warning on every run. What shipped adds `${{ github.job }}` to the key. Also changed: the week stamp is `date -u +%G-%V` (the ISO week-numbering year, paired with the ISO week) rather than the plan's `%Y-%V` — `%G` is what keeps the first days of a January from reusing a key from the year before.
+
+### What CI has not yet run
+
+The `extension-tests` and `extension-tests-live` jobs Task 10 added have never executed on GitHub Actions. They were validated locally — `actionlint` clean, and both labels passing on macOS — but the Linux and Windows legs, `xvfb`, and `docker compose` on a GitHub runner are unverified until CI runs them for the first time.
