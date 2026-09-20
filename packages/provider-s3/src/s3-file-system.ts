@@ -27,6 +27,7 @@ import type {
   RemotePath,
 } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
+import { buildRange, copySource, keyFor, prefixFor, trimSlashes } from './s3-helpers.js';
 import { readSettings, type S3Settings } from './settings.js';
 import { openUploadStream, writeConditions } from './upload-stream.js';
 
@@ -202,13 +203,14 @@ export class S3FileSystem implements RemoteFileSystem {
     options?: ReadOptions,
   ): Promise<ReadableStream<Uint8Array>> {
     const range = buildRange(options);
+
     const response = await this.#run(
       (client) =>
         client.send(
           new GetObjectCommand({
             Bucket: this.#bucket,
             Key: this.#key(path),
-            ...(range !== undefined ? { Range: range } : {}),
+            ...(range !== undefined ? { Range: range.header } : {}),
           }),
           opts(options?.signal),
         ),
@@ -365,9 +367,7 @@ export class S3FileSystem implements RemoteFileSystem {
           new CopyObjectCommand({
             Bucket: this.#bucket,
             Key: this.#key(to),
-            // CopySource includes the bucket and must be URI-encoded, but the
-            // slashes separating key segments have to stay literal.
-            CopySource: `${this.#bucket}/${encodeURIComponent(this.#key(from)).replace(/%2F/g, '/')}`,
+            CopySource: copySource(this.#bucket, this.#key(from)),
             ...this.#storageOptions(),
           }),
           opts(options?.signal),
@@ -403,15 +403,11 @@ export class S3FileSystem implements RemoteFileSystem {
 
   /** Applies the connection's root prefix, so a connection can be scoped to a subfolder. */
   #key(path: RemotePath): string {
-    const root = this.#settings.rootPrefix;
-    const key = path.toKey();
-    return root === '' ? key : `${root}/${key}`;
+    return keyFor(this.#settings, path);
   }
 
   #prefix(path: RemotePath): string {
-    const root = this.#settings.rootPrefix;
-    const prefix = path.toPrefix();
-    return root === '' ? prefix : `${root}/${prefix}`;
+    return prefixFor(this.#settings, path);
   }
 
   #requireClient(): S3Client {
@@ -448,17 +444,6 @@ const DIRECTORY_STAT: FileStat = { type: 'directory', size: 0 };
 
 function opts(signal: AbortSignal | undefined): { abortSignal?: AbortSignal } {
   return signal !== undefined ? { abortSignal: signal } : {};
-}
-
-function buildRange(options: ReadOptions | undefined): string | undefined {
-  if (options?.offset === undefined) return undefined;
-  const start = options.offset;
-  const end = options.length !== undefined ? start + options.length - 1 : undefined;
-  return `bytes=${start}-${end ?? ''}`;
-}
-
-function trimSlashes(value: string): string {
-  return value.replace(/^\/+|\/+$/g, '');
 }
 
 function requireString(record: Readonly<Record<string, unknown>>, key: string): string {
