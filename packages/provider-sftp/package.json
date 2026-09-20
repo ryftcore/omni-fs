@@ -18,15 +18,17 @@
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
     "lint": "eslint src",
     "test": "vitest run --passWithNoTests",
+    "test:conformance": "vitest run --config vitest.conformance.config.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
     "@omni-fs/core": "workspace:*",
-    "ssh2-sftp-client": "^12.1.1"
+    "ssh2": "^1.17.0"
   },
   "devDependencies": {
     "@omni-fs/testing": "workspace:*",
     "@types/node": "^22.8.0",
+    "@types/ssh2": "^1.15.6",
     "typescript": "^6.0.3",
     "vitest": "^5.0.0"
   }
