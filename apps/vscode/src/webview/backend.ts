@@ -31,6 +31,22 @@ export class WebviewBackend implements ConnectionsBackend {
 
   constructor() {
     window.addEventListener('message', (event: MessageEvent) => {
+      // Only the extension host may resolve a pending call. VS Code loads a
+      // webview's content in a frame at `vscode-webview://<uuid>`, an origin
+      // that is this webview's and nothing else's, and `webview.postMessage`
+      // arrives there carrying it. Anything else on the `message` bus is
+      // somebody else — a frame inside rendered content, another extension's
+      // webview, an opener — and `#receive` resolves a pending call on
+      // nothing but a matching id, so a stranger could otherwise answer
+      // `listConnections`, or fail a `test` with a message the user would
+      // read as the server's. The panel's CSP (`default-src 'none'`) means no
+      // such frame can exist today; this is the second lock.
+      //
+      // The sender is not checked as well because there is nothing nameable
+      // to check it against: `event.source` reaches the content frame as a
+      // `Window` that is neither `parent`, `top` nor this frame.
+      // `webview-origin.test.ts` measures both facts against a real editor.
+      if (event.origin !== window.origin) return;
       this.#receive(event.data as HostToView);
     });
     // The host replies with full state; this also covers a webview reload.
