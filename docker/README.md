@@ -69,8 +69,8 @@ not what ships. On a headless Linux box, prefix the last command with
 
 It creates one `/omnifs-ext-live-<timestamp>-<pid>` directory per server and
 removes it again, so the seeded tree above is what you should see both before
-and after. It never skips: with nothing running it retries for 60 seconds and
-then fails, naming the server.
+and after. It never skips: with nothing running it retries for up to 60 seconds
+and then fails, naming the server.
 
 ## S3 — MinIO
 

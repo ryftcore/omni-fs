@@ -17,8 +17,10 @@ pnpm test:extension        # the extension inside a real VS Code host
 pnpm test:extension:live   # + the compose stack, against the minified bundle
 ```
 
-CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, plus
-`format:check` and the commit-title check in a separate workflow.
+CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, and
+`test:extension` on those same three; `test:extension:live` needs the compose
+stack, so it runs on Linux alone. `format:check` and the commit-title check are
+in a separate workflow.
 
 Single test:
 
