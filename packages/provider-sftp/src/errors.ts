@@ -43,11 +43,25 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
   const message = cause instanceof Error ? cause.message : String(cause);
   const base = { path, providerId: 'sftp', cause } as const;
 
-  if (errorName(cause) === 'AbortError') return OmniFsError.cancelled(path ?? 'SFTP request');
+  // Built inline rather than through `OmniFsError.notFound`/`.cancelled`:
+  // those factories drop `providerId` (and `cancelled` drops `path` and
+  // `cause` too), which would break this function's invariant that
+  // everything it builds carries `path` and `providerId: 'sftp'`.
+  if (errorName(cause) === 'AbortError') {
+    return new OmniFsError({
+      ...base,
+      code: 'Cancelled',
+      message: `Cancelled: ${path ?? 'SFTP request'}`,
+    });
+  }
 
   switch (statusCode(cause)) {
     case STATUS.NO_SUCH_FILE:
-      return OmniFsError.notFound(path ?? 'resource', cause);
+      return new OmniFsError({
+        ...base,
+        code: 'NotFound',
+        message: `Not found: ${path ?? 'resource'}`,
+      });
     case STATUS.PERMISSION_DENIED:
       return new OmniFsError({ ...base, code: 'PermissionDenied', message });
     case STATUS.BAD_MESSAGE:

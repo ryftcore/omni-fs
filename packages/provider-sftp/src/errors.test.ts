@@ -65,6 +65,21 @@ describe('toOmniFsError', () => {
     expect(error.providerId).toBe('sftp');
   });
 
+  it('keeps the path, provider id and cause on a NotFound built via the status-2 branch', () => {
+    const original = statusError(2);
+    const error = toOmniFsError(original, '/missing.txt');
+    expect(error.path).toBe('/missing.txt');
+    expect(error.providerId).toBe('sftp');
+    expect(error.cause).toBe(original);
+  });
+
+  it('keeps the path and provider id on a Cancelled built via the AbortError branch', () => {
+    const abort = Object.assign(new Error('aborted'), { name: 'AbortError' });
+    const error = toOmniFsError(abort, '/a.txt');
+    expect(error.path).toBe('/a.txt');
+    expect(error.providerId).toBe('sftp');
+  });
+
   it('calls anything it cannot place Unknown rather than guessing', () => {
     expect(toOmniFsError(new Error('something else entirely')).code).toBe('Unknown');
   });
