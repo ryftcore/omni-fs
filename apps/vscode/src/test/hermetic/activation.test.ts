@@ -1,6 +1,7 @@
 import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
 import type { OmniFsApi } from '../../extension.js';
+import { EXTENSION_ID } from '../helpers.js';
 
 /**
  * The manifest against the code.
@@ -17,8 +18,6 @@ import type { OmniFsApi } from '../../extension.js';
  * so asserting on it would be tautological. That gap is real and recorded in
  * the spec's Risks rather than papered over.
  */
-
-const EXTENSION_ID = 'ryftcore.omni-fs-vscode';
 
 /**
  * Every `omniFs.*` key the code actually reads: five in `extension.ts` and
