@@ -54,7 +54,7 @@ export const FTP_SETTINGS_SCHEMA: SettingsSchema = {
       key: 'rootPrefix',
       label: 'Root prefix',
       placeholder: 'public_html',
-      help: 'Optional. Scopes the connection to a subfolder of the login directory.',
+      help: 'Optional. Scopes the connection to a subfolder of the login directory. Begin with / for an absolute server path, e.g. /srv/ftp/shared.',
     },
   ],
 };
@@ -88,6 +88,17 @@ export const FTP_CAPABILITIES: ProviderCapabilities = {
  * filling these in is self-contained work that cannot ripple outward. Follow
  * `packages/provider-s3` as the reference, and run the shared conformance suite
  * (`pnpm test:conformance`) against a vsftpd container to verify.
+ *
+ * `rootPrefix` is relative to the login directory; a leading `/` makes it an
+ * absolute server path instead. Both forms must work: `public_html` sits
+ * under the login directory, `/srv/ftp/shared` does not.
+ *
+ * Both `readSettings` implementations that exist today — provider-s3 and
+ * provider-webdav — strip the leading slash, so do not copy that part. It is
+ * right for them: the absolute part of the location already lives in their
+ * Bucket or Server URL field, and `rootPrefix` has no absolute form left to
+ * express. Here the server's filesystem root is a real, reachable place that
+ * no other setting names, so the slash is load-bearing.
  */
 class FtpFileSystem implements RemoteFileSystem {
   readonly capabilities = FTP_CAPABILITIES;

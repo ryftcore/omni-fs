@@ -52,8 +52,8 @@ export const SFTP_SETTINGS_SCHEMA: SettingsSchema = {
       kind: 'text',
       key: 'rootPrefix',
       label: 'Root prefix',
-      placeholder: 'var/www',
-      help: 'Optional. Scopes the connection to a subfolder of the login directory.',
+      placeholder: '/var/www',
+      help: 'Optional. Scopes the connection to a subfolder of the login directory. Begin with / for an absolute server path, e.g. /var/www.',
     },
   ],
 };
@@ -92,6 +92,18 @@ export const SFTP_CAPABILITIES: ProviderCapabilities = {
  * TODO(provider-sftp): implement against `ssh2-sftp-client`.
  * See `packages/provider-s3` for the reference shape, and verify with the
  * shared conformance suite against an openssh-server container.
+ *
+ * `rootPrefix` is relative to the login directory; a leading `/` makes it an
+ * absolute server path instead. Both forms must work: `projects` sits under
+ * the login directory, `/var/www` does not — and on SFTP the absolute form is
+ * the common one, which is why the placeholder shows it.
+ *
+ * Both `readSettings` implementations that exist today — provider-s3 and
+ * provider-webdav — strip the leading slash, so do not copy that part. It is
+ * right for them: the absolute part of the location already lives in their
+ * Bucket or Server URL field, and `rootPrefix` has no absolute form left to
+ * express. Here the server's filesystem root is a real, reachable place that
+ * no other setting names, so the slash is load-bearing.
  */
 class SftpFileSystem implements RemoteFileSystem {
   readonly capabilities = SFTP_CAPABILITIES;
