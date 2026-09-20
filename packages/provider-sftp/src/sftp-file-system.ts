@@ -159,6 +159,7 @@ export class SftpFileSystem implements RemoteFileSystem {
     const entries = (
       await this.#run(() => session.readdir(this.#remote(path), signal), path)
     ).filter((entry) => entry.filename !== '.' && entry.filename !== '..');
+    for (const entry of entries) requireSingleSegment(path, entry.filename);
 
     const links = entries.filter((entry) => toFileType(entry.attrs.mode) === 'symlink');
     const resolved = new Map<string, FileStat>();
@@ -292,16 +293,10 @@ export class SftpFileSystem implements RemoteFileSystem {
         await session.mkdir(this.#remote(directory), signal);
       } catch (error) {
         if (!isFailure(error)) throw toOmniFsError(error, directory.value);
+        // Status 4 with something that is not a directory already sitting
+        // there: the path is taken by a file, so this is not the no-op.
         if ((await this.stat(directory, signal)).type !== 'directory') {
-          // Built inline: `OmniFsError.alreadyExists` drops `providerId`, and
-          // everything this package raises names the provider it came from.
-          throw new OmniFsError({
-            code: 'AlreadyExists',
-            message: `Already exists: ${directory.value}`,
-            path: directory.value,
-            providerId: 'sftp',
-            cause: error,
-          });
+          throw this.#occupiedError(directory, error);
         }
       }
     }
@@ -345,14 +340,8 @@ export class SftpFileSystem implements RemoteFileSystem {
   #writeError(error: unknown, path: RemotePath, flags: SftpWriteFlags): OmniFsError {
     if (flags !== 'wx' || !isFailure(error)) return toOmniFsError(error, path.value);
 
-    // Built inline: `OmniFsError.alreadyExists` drops `providerId`.
-    return new OmniFsError({
-      code: 'AlreadyExists',
-      message: `Already exists: ${path.value}`,
-      path: path.value,
-      providerId: 'sftp',
-      cause: error,
-    });
+    // The exclusive open lost the race: the path is taken.
+    return this.#occupiedError(path, error);
   }
 
   /**
@@ -364,8 +353,9 @@ export class SftpFileSystem implements RemoteFileSystem {
    * cannot destroy something outside the tree.
    *
    * A non-recursive delete of a non-empty directory is status 4 from `rmdir`,
-   * narrowed here to `NotEmpty`. Without that narrowing a caller who asked to
-   * remove an empty directory could not tell "not empty" from any other refusal.
+   * narrowed to `NotEmpty` in `#removeDirectory`. Without that narrowing a
+   * caller who asked to remove an empty directory could not tell "not empty"
+   * from any other refusal.
    */
   async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
     const session = this.#requireSession();
@@ -382,6 +372,55 @@ export class SftpFileSystem implements RemoteFileSystem {
       return;
     }
 
+    await this.#removeDirectory(session, path, signal);
+  }
+
+  /**
+   * Depth-first, children before their parent, because `SSH_FXP_RMDIR` only
+   * removes an empty directory.
+   *
+   * `readdir` deliberately, not `list`: `list` resolves symlinks, and a recursive
+   * delete that followed one would delete the link's *target* — a file outside
+   * the tree the caller asked to remove.
+   *
+   * Every name is checked before any of them is acted on, so a listing carrying
+   * one unusable entry costs nothing rather than half a tree.
+   */
+  async #deleteTree(
+    session: SftpConnection,
+    path: RemotePath,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const entries = (
+      await this.#run(() => session.readdir(this.#remote(path), signal), path)
+    ).filter((entry) => entry.filename !== '.' && entry.filename !== '..');
+    for (const entry of entries) requireSingleSegment(path, entry.filename);
+
+    for (const entry of entries) {
+      const child = path.join(entry.filename);
+      if (toFileType(entry.attrs.mode) === 'directory') {
+        await this.#deleteTree(session, child, signal);
+      } else {
+        await this.#run(() => session.unlink(this.#remote(child), signal), child);
+      }
+    }
+
+    await this.#removeDirectory(session, path, signal);
+  }
+
+  /**
+   * `SSH_FXP_RMDIR`, with status 4 read as `NotEmpty`.
+   *
+   * Shared by the non-recursive `delete` and by the walk's last step so one
+   * syscall cannot answer two ways: a directory something re-populated
+   * mid-walk would otherwise surface as `Unknown` from the walk and `NotEmpty`
+   * from the plain delete.
+   */
+  async #removeDirectory(
+    session: SftpConnection,
+    path: RemotePath,
+    signal?: AbortSignal,
+  ): Promise<void> {
     try {
       await session.rmdir(this.#remote(path), signal);
     } catch (error) {
@@ -394,35 +433,6 @@ export class SftpFileSystem implements RemoteFileSystem {
         cause: error,
       });
     }
-  }
-
-  /**
-   * Depth-first, children before their parent, because `SSH_FXP_RMDIR` only
-   * removes an empty directory.
-   *
-   * `readdir` deliberately, not `list`: `list` resolves symlinks, and a recursive
-   * delete that followed one would delete the link's *target* — a file outside
-   * the tree the caller asked to remove.
-   */
-  async #deleteTree(
-    session: SftpConnection,
-    path: RemotePath,
-    signal?: AbortSignal,
-  ): Promise<void> {
-    const entries = (
-      await this.#run(() => session.readdir(this.#remote(path), signal), path)
-    ).filter((entry) => entry.filename !== '.' && entry.filename !== '..');
-
-    for (const entry of entries) {
-      const child = path.join(entry.filename);
-      if (toFileType(entry.attrs.mode) === 'directory') {
-        await this.#deleteTree(session, child, signal);
-      } else {
-        await this.#run(() => session.unlink(this.#remote(child), signal), child);
-      }
-    }
-
-    await this.#run(() => session.rmdir(this.#remote(path), signal), path);
   }
 
   /**
@@ -466,8 +476,38 @@ export class SftpFileSystem implements RemoteFileSystem {
         'Replacing a rename destination without posix-rename, which is not atomic',
         { from: from.value, to: to.value },
       );
-      await this.#run(() => session.unlink(this.#remote(to), signal), to);
-      await this.#run(() => session.rename(this.#remote(from), this.#remote(to), signal), from);
+      try {
+        await session.unlink(this.#remote(to), signal);
+      } catch {
+        // The destination was not in the way after all, so the rename failed
+        // for one of the other things status 4 covers — `EXDEV`, `EISDIR`,
+        // `EBUSY`, `ENOTEMPTY`. Report that original failure rather than the
+        // `unlink`'s: answering `NotFound` about `to` would tell the VS Code
+        // host the file is absent, which is what drives create-on-save.
+        throw toOmniFsError(error, from.value);
+      }
+
+      try {
+        await session.rename(this.#remote(from), this.#remote(to), signal);
+      } catch (retryError) {
+        // `to` is gone and nothing replaced it. Nothing here can put it back,
+        // so the error has to carry that: a plain rename failure would read as
+        // "nothing happened", and the caller would leave a file it still
+        // believes is there deleted.
+        this.#logger.log('error', 'A rename destination was removed and not replaced', {
+          from: from.value,
+          to: to.value,
+        });
+        const translated = toOmniFsError(retryError, from.value);
+        throw new OmniFsError({
+          code: translated.code,
+          message: `${translated.message} (${to.value} was removed to make room and has not been replaced)`,
+          path: from.value,
+          providerId: 'sftp',
+          cause: retryError,
+          retryable: translated.retryable,
+        });
+      }
     }
   }
 
@@ -490,17 +530,19 @@ export class SftpFileSystem implements RemoteFileSystem {
   }
 
   /**
-   * Status 4 on a destination the caller asked us not to replace.
+   * "Something is already at this path" — the one error every status 4 that
+   * means an occupied path resolves to: an exclusive open, a `mkdir` onto a
+   * file, and a `rename` or `copy` the caller told us not to overwrite.
    *
    * Constructed here rather than through `OmniFsError.alreadyExists`, which
    * drops `providerId` — everything this package raises names the provider it
-   * came from, as `#writeError` and `createDirectory` already do.
+   * came from.
    */
-  #occupiedError(to: RemotePath, cause: unknown): OmniFsError {
+  #occupiedError(path: RemotePath, cause: unknown): OmniFsError {
     return new OmniFsError({
       code: 'AlreadyExists',
-      message: `Already exists: ${to.value}`,
-      path: to.value,
+      message: `Already exists: ${path.value}`,
+      path: path.value,
       providerId: 'sftp',
       cause,
     });
@@ -549,6 +591,31 @@ function isConnectionFailure(error: OmniFsError): boolean {
   return (
     error.code === 'ConnectionFailed' || error.code === 'Cancelled' || error.code === 'Timeout'
   );
+}
+
+/**
+ * A directory entry whose name the server should never have sent.
+ *
+ * POSIX forbids `/` inside a filename, so a name carrying one comes from a
+ * broken or hostile server — and taking it at face value is how a client walks
+ * out of the subtree it was asked to work in, because `RemotePath.join`
+ * resolves `..` upward: an entry named `../../x` lands above the connection
+ * base, where a recursive delete would remove something nobody asked about.
+ * Refused rather than sanitised, because there is no legitimate reading of it.
+ */
+function requireSingleSegment(directory: RemotePath, filename: string): void {
+  if (filename === '' || filename.includes('/')) {
+    throw new OmniFsError({
+      code: 'ProtocolError',
+      message: `SFTP server returned a directory entry that is not a single path segment: ${JSON.stringify(filename)}`,
+      path: directory.value,
+      providerId: 'sftp',
+      // `ProtocolError` is retryable by default, and this one is not: a server
+      // that sends an unusable name will send it again. The same explicit
+      // `false` `toOmniFsError` already puts on status 5.
+      retryable: false,
+    });
+  }
 }
 
 function writeFlags(options: WriteOptions | undefined): SftpWriteFlags {

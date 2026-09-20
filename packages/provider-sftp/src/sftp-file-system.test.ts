@@ -336,6 +336,28 @@ describe('SftpFileSystem list', () => {
     expect(entries[0]).toMatchObject({ name: 'loop', type: 'symlink' });
   });
 
+  it('refuses an entry whose name is not a single path segment', async () => {
+    const { fs } = await connected(
+      fakeSession({ readdir: async () => [{ filename: '../../escape', attrs: file() }] }),
+    );
+
+    await expect(collect(fs.list(RemotePath.parse('/docs')))).rejects.toSatisfy(
+      // Not retryable: a server that sends an unusable name will send it again.
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'ProtocolError' && !error.retryable,
+    );
+  });
+
+  it('keeps a name containing a backslash, which is a legal POSIX filename', async () => {
+    const { fs } = await connected(
+      fakeSession({ readdir: async () => [{ filename: 'back\\slash', attrs: file() }] }),
+    );
+
+    const entries = await collect(fs.list(RemotePath.parse('/docs')));
+    expect(entries[0]?.name).toBe('back\\slash');
+    expect(entries[0]?.path.value).toBe('/docs/back\\slash');
+  });
+
   it('gives up on the listing when the follow-up is cancelled', async () => {
     const { fs } = await connected(
       fakeSession({
@@ -721,6 +743,33 @@ describe('SftpFileSystem delete', () => {
     await fs.delete(RemotePath.parse('/tree'), { recursive: true });
     expect(order).toEqual(['unlink /home/omnifs/tree/current', 'rmdir /home/omnifs/tree']);
   });
+
+  it('removes nothing at all when the server names an entry outside the tree', async () => {
+    // `RemotePath.join` resolves `..` upward, so `../../escape` under
+    // `/home/omnifs/tree` would land on `/escape` — outside the subtree, with
+    // the connection base as the blast radius. The whole listing is refused
+    // before anything is removed, which is why `one.txt` survives too.
+    const touched: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => directory(),
+        readdir: async (path: string) =>
+          path === '/home/omnifs/tree'
+            ? [
+                { filename: 'one.txt', attrs: file() },
+                { filename: '../../escape', attrs: file() },
+              ]
+            : [],
+        unlink: async (path: string) => void touched.push(`unlink ${path}`),
+        rmdir: async (path: string) => void touched.push(`rmdir ${path}`),
+      }),
+    );
+
+    await expect(fs.delete(RemotePath.parse('/tree'), { recursive: true })).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'ProtocolError',
+    );
+    expect(touched).toEqual([]);
+  });
 });
 
 describe('SftpFileSystem rename', () => {
@@ -792,6 +841,57 @@ describe('SftpFileSystem rename', () => {
 
     await fs.rename(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'), { overwrite: false });
     expect(posix).toBe(0);
+  });
+
+  it('reports the original failure when the destination was not in the way after all', async () => {
+    // Status 4 also covers EXDEV, EISDIR and EBUSY. Letting the `unlink`'s own
+    // status 2 surface would answer `NotFound` about a path the caller never
+    // asked about — and `NotFound` is what drives create-on-save in the VS Code
+    // host, so a cross-device rename would read as "write this file".
+    const { fs } = await connected(
+      fakeSession({
+        rename: async () => {
+          throw Object.assign(new Error('Cross-device link'), { code: 4 });
+        },
+        unlink: async () => {
+          throw notFound();
+        },
+      }),
+    );
+
+    await expect(
+      fs.rename(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt')),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) &&
+        error.code === 'Unknown' &&
+        error.message === 'Cross-device link' &&
+        error.path === '/before.txt',
+    );
+  });
+
+  it('says the destination was destroyed when the replacement rename fails', async () => {
+    let renames = 0;
+    const { fs } = await connected(
+      fakeSession({
+        rename: async () => {
+          renames += 1;
+          throw renames === 1
+            ? failure()
+            : Object.assign(new Error('Permission denied'), { code: 3 });
+        },
+        unlink: async () => undefined,
+      }),
+    );
+
+    await expect(
+      fs.rename(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt')),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) &&
+        error.code === 'PermissionDenied' &&
+        error.message.includes('/after.txt was removed to make room and has not been replaced'),
+    );
   });
 });
 
