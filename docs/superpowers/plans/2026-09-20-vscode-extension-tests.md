@@ -114,11 +114,17 @@ describe('OmniFsError.is across module copies', () => {
   });
 
   it('keeps the brand off anything that serialises the error', () => {
-    // A non-enumerable property: a spread, Object.keys and JSON.stringify must
-    // not carry it, or every logged error grows a mystery key and a structured
-    // clone across the webview boundary starts failing on a symbol.
+    // Non-enumerable: a spread-based copy of the error must not carry the
+    // brand, or every logged error grows a mystery symbol key. (The brand is
+    // separately absent after any postMessage hop, since structuredClone
+    // drops symbol-keyed properties regardless of enumerability — that is not
+    // what this assertion is about.)
+    //
+    // `Object.getOwnPropertySymbols`, not `Object.keys`: Object.keys returns
+    // only String-keyed properties and never surfaces a symbol, so asserting
+    // on it here would pass even with the brand marked enumerable.
     const error = new OmniFsError({ code: 'NotFound', message: 'gone' });
-    expect(Object.keys({ ...error })).not.toContain('Symbol(omni-fs.error)');
+    expect(Object.getOwnPropertySymbols({ ...error })).not.toContain(Symbol.for('omni-fs.error'));
     expect(Object.getOwnPropertyDescriptor(error, Symbol.for('omni-fs.error'))?.enumerable).toBe(
       false,
     );
@@ -181,7 +187,7 @@ Expected: PASS, both.
 
 - [ ] **Step 5: Prove the whole workspace still agrees**
 
-`ManagedFileSystem`, `ConnectionManager`, `TransferQueue` and all four providers branch on `OmniFsError.is`. Rebuild so dependents see the change, then run everything.
+`ManagedFileSystem`, `OmniFsError.wrap`, the S3/SFTP/WebDAV providers and the shared conformance suite all branch on `OmniFsError.is`. Rebuild so dependents see the change, then run everything.
 
 ```bash
 pnpm build
