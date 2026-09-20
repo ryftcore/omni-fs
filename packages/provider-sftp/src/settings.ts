@@ -63,7 +63,8 @@ export interface SftpSettings {
   readonly knownHostsPath: string | undefined;
   /**
    * Where the connection starts. `''` is the login directory, `projects` sits
-   * below it, and `/var/www` is an absolute server path.
+   * below it, `/var/www` is an absolute server path, and `/` is the server's
+   * filesystem root.
    *
    * This is the one `readSettings` in the repo that keeps a leading slash.
    * `provider-s3` and `provider-webdav` strip theirs, rightly: the absolute
@@ -110,11 +111,18 @@ export function readSettings(raw: Readonly<Record<string, unknown>>): SftpSettin
  * double it. A repeated leading slash collapses to one: `//var` and `/var` name
  * the same directory, and keeping both spellings would make two connections
  * that differ only in a typo look different in logs.
+ *
+ * A prefix that is nothing but slashes is the exception: it stays `/`, the
+ * server's filesystem root. Stripping it to `''` would silently move the
+ * connection to the login directory — a different place, which the user already
+ * has a way to ask for, and the one absolute path they would otherwise have no
+ * spelling for.
  */
 function normaliseRootPrefix(value: string | undefined): string {
   if (value === undefined) return '';
   const trimmed = value.replace(/\/+$/, '');
-  return trimmed.startsWith('/') ? `/${trimmed.replace(/^\/+/, '')}` : trimmed;
+  if (!value.startsWith('/')) return trimmed;
+  return trimmed === '' ? '/' : `/${trimmed.replace(/^\/+/, '')}`;
 }
 
 function invalid(message: string): OmniFsError {

@@ -35,6 +35,14 @@ describe('readSettings', () => {
     expect(readSettings({ ...base, rootPrefix: '//var/www/' }).rootPrefix).toBe('/var/www');
   });
 
+  it('keeps a lone slash, which is the server filesystem root and not the login directory', () => {
+    // Stripping it to `''` would silently move the connection to the login
+    // directory, and leave the server's root — a real, reachable place no other
+    // setting names — with no spelling at all.
+    expect(readSettings({ ...base, rootPrefix: '/' }).rootPrefix).toBe('/');
+    expect(readSettings({ ...base, rootPrefix: '///' }).rootPrefix).toBe('/');
+  });
+
   it('treats a blank rootPrefix as the login directory', () => {
     expect(readSettings({ ...base, rootPrefix: '   ' }).rootPrefix).toBe('');
   });

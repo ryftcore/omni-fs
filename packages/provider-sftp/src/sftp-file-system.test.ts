@@ -133,6 +133,20 @@ describe('SftpFileSystem connect', () => {
     expect(seen).toEqual(['/var/www/a.txt']);
   });
 
+  it('takes a lone slash as the server filesystem root', async () => {
+    const seen: string[] = [];
+    const session = fakeSession({
+      stat: async (path: string) => {
+        seen.push(path);
+        return file();
+      },
+    });
+    const { fs } = await connected(session, { rootPrefix: '/' });
+
+    await fs.stat(RemotePath.parse('/a.txt'));
+    expect(seen).toEqual(['/a.txt']);
+  });
+
   it('puts a relative root prefix below the login directory', async () => {
     const seen: string[] = [];
     const session = fakeSession({
