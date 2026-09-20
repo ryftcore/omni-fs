@@ -4,7 +4,7 @@ import { NOOP_LOGGER } from '../ports/logger.js';
 import { OmniFsError } from '../errors.js';
 import { RemotePath } from '../model/path.js';
 import type { TransferExecutor, TransferQueueOptions } from './queue.js';
-import type { TransferRequest, TransferTask } from './types.js';
+import type { TransferRequest } from './types.js';
 
 /**
  * The queue is the only place that decides how hard to push a server: a global
