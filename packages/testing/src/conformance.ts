@@ -222,6 +222,30 @@ export function runConformanceSuite(harness: ConformanceHarness): void {
       });
     });
 
+    it('reads no bytes for a zero-length range, and still refuses a missing path', async () => {
+      await withFs(async (fs, root) => {
+        if (!fs.capabilities.canWrite || !fs.capabilities.canReadRange) return;
+
+        const path = root.join('empty-range.txt');
+        await fs.writeFile(path, new TextEncoder().encode('0123456789'));
+
+        // No protocol has a spelling for "zero bytes". Every range syntax in
+        // use is inclusive at both ends, so the arithmetic alone produces an
+        // inverted range — `bytes=2--1` over HTTP — which a server answers
+        // with an error or, worse, ignores, returning the whole file to a
+        // caller that asked for none of it. Each provider has to answer this
+        // itself, and all four got here independently: this case is what
+        // stops the fifth from having to.
+        expect((await fs.readFile(path, { offset: 2, length: 0 })).byteLength).toBe(0);
+
+        // Answering it locally must not turn a missing path into an empty
+        // success. Existence stays the server's to decide.
+        await expect(
+          fs.readFile(root.join('absent.txt'), { offset: 0, length: 0 }),
+        ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'NotFound');
+      });
+    });
+
     it('copies a file, leaving the original in place', async () => {
       await withFs(async (fs, root) => {
         if (!fs.capabilities.canWrite || fs.copy === undefined) return;
