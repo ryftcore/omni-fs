@@ -28,7 +28,7 @@ import type {
 } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import { readSettings, type S3Settings } from './settings.js';
-import { openUploadStream } from './upload-stream.js';
+import { openUploadStream, writeConditions } from './upload-stream.js';
 
 /**
  * S3 and anything that speaks its API: MinIO, Cloudflare R2, Backblaze B2,
@@ -267,6 +267,7 @@ export class S3FileSystem implements RemoteFileSystem {
         // lib-storage wants a Node stream or a buffer, not a web stream.
         Body: Readable.fromWeb(readable),
         ...(options?.contentType !== undefined ? { ContentType: options.contentType } : {}),
+        ...writeConditions(options),
         ...this.#storageOptions(),
       },
       queueSize: 4,
@@ -281,7 +282,7 @@ export class S3FileSystem implements RemoteFileSystem {
 
     options?.signal?.addEventListener('abort', () => void upload.abort(), { once: true });
 
-    return openUploadStream(upload, writable, path.value);
+    return openUploadStream(upload, writable, path.value, options?.overwrite === false);
   }
 
   async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {

@@ -75,6 +75,21 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
   return new OmniFsError({ ...base, code: 'Unknown', message });
 }
 
+/**
+ * Whether S3 answered 412 Precondition Failed.
+ *
+ * `If-None-Match: *` and `If-Match` both fail this way, and only the caller's
+ * own option tells the two apart: the first means an object is already sitting
+ * there (`AlreadyExists`), the second that it changed underneath the caller
+ * (`Conflict`). The shared mapping above refuses to guess and answers
+ * `Conflict`; `openUploadStream` narrows it at the one call site that knows
+ * which condition it asked for. Same shape, same reason, as
+ * `isPreconditionFailed` in provider-webdav.
+ */
+export function isPreconditionFailed(cause: unknown): boolean {
+  return errorName(cause) === 'PreconditionFailed' || httpStatus(cause) === 412;
+}
+
 function errorName(cause: unknown): string {
   if (typeof cause !== 'object' || cause === null) return '';
   const record = cause as { name?: unknown; Code?: unknown };
