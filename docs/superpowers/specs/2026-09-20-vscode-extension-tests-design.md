@@ -358,11 +358,11 @@ Acceptable for a smoke test, and stated here so nobody hunts a leak.
 
 ## The in-memory disk
 
-`MemoryFileSystem` keeps its state private, so tests seed it through its own
-`RemoteFileSystem` interface rather than by reaching inside. `connect()` only
-sets a flag; no _filesystem operation_ consults it, though
-`ConnectionManager.acquire` does via `isAlive()`, so seeding before connection
-is safe.
+`MemoryFileSystem` exposes a public `seed(files)` test helper that writes
+content without going through the write path, which is how these tests set up a
+known tree. `connect()` only sets a flag; no _filesystem operation_ consults it,
+though `ConnectionManager.acquire` does via `isAlive()`, so seeding before
+connection is safe.
 
 `memoryProvider.create` returns a **new** `MemoryFileSystem` per call, which
 would give the test no handle on the bytes it is asserting about. The helper
@@ -685,18 +685,22 @@ unstable before 1.0, with the credential store deliberately off it.
 
 Recorded here because they are out of scope, not because they are unimportant.
 
-**`packages/core`'s own tests do not exist.** No test anywhere constructs a
-`ManagedFileSystem`, an `EntryCache` or a `ProviderRegistry`, or calls
-`ConnectionManager.acquire`; both hermetic conformance runs go against a raw
-`MemoryFileSystem`, so the object-store profile never reaches the emulation it
-exists to provoke — rename as copy-plus-delete, delete by walk, silent `mkdir`,
-cache invalidation, read-only enforcement. Left as designed, this Electron suite
-becomes the only thing exercising that code, incidentally and on the
-full-capability profile only, so a `ManagedFileSystem` regression would surface
-as a slow three-OS extension-host failure that looks like a host bug. The right
-home is a Vitest file in `packages/testing` running `ManagedFileSystem` over
-`MemoryFileSystem` in both profiles. That is cheaper than anything here and
-should come first if there is a choice.
+**`packages/core`'s own tests — done, ahead of this phase.** The review found
+that nothing constructed a `ManagedFileSystem`, an `EntryCache`, a
+`ProviderRegistry` or a `TransferQueue`, which would have left this Electron
+suite as the only thing exercising that code, incidentally and on the
+full-capability profile only. That gap is now closed: `ManagedFileSystem` runs
+against `MemoryFileSystem` in both capability profiles in `packages/testing`,
+and the other four have colocated tests in core.
+
+It found six bugs, three of which change what this phase must assume:
+`createWriteStream` invalidated its cache when the stream opened rather than
+when the bytes landed; an emulated rename could not move a directory at all,
+because the copy it falls back to had no directory branch; and a connection
+whose provider could not be built was parked on `connecting` forever. The
+others: a reconnect dropped the dead filesystem without closing its socket, a
+failed streamed write left a stale stat cached, and work enqueued before
+`setExecutor` never started.
 
 **`VsCodeConfigStore` writes `Global` but reads the merged value.** With a
 workspace-level `omniFs.connections` — the team-sharing case the setting's own
