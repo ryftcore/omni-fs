@@ -68,6 +68,15 @@ export class SftpFileSystem implements RemoteFileSystem {
   async connect(signal?: AbortSignal): Promise<void> {
     if (this.#session?.isAlive() === true) return;
 
+    // A session that is no longer alive may still hold a socket: it is marked
+    // dead on `error` as well as on `close`. Let it go before opening another,
+    // or a reconnect leaks the old connection for the life of the process.
+    // `close()` on a dead session takes its already-closed branch and returns
+    // without waiting, so this costs nothing on the common path.
+    const previous = this.#session;
+    this.#session = undefined;
+    await previous?.close();
+
     const secret = await this.#context.getSecret(signal);
     const session = await this.#openSession({
       settings: this.#settings,

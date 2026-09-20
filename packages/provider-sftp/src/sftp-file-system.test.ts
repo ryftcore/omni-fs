@@ -151,6 +151,32 @@ describe('SftpFileSystem connect', () => {
     await fs.connect();
     expect(opened).toHaveLength(1);
   });
+
+  it('lets go of a dead session before it opens another', async () => {
+    let alive = true;
+    let closed = 0;
+    const dead = fakeSession({
+      isAlive: () => alive,
+      close: async () => {
+        closed += 1;
+      },
+    });
+    const replacement = fakeSession({});
+    const queue: SftpConnection[] = [dead, replacement];
+    const opened: SftpSessionOptions[] = [];
+    const fs = new SftpFileSystem(context(), async (options) => {
+      opened.push(options);
+      return queue.shift() ?? replacement;
+    });
+
+    await fs.connect();
+    alive = false;
+    await fs.connect();
+
+    expect(closed).toBe(1);
+    expect(opened).toHaveLength(2);
+    expect(fs.isAlive()).toBe(true);
+  });
 });
 
 describe('SftpFileSystem capabilities', () => {
