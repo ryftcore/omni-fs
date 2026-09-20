@@ -82,11 +82,11 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
 
   async stat(path: RemotePath, signal?: AbortSignal): Promise<FileStat> {
     const cached = this.#cache.getStat(this.#connectionId, path);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) return this.#stampReadOnly(cached);
 
     const stat = await this.#inner.stat(path, signal);
     this.#cache.setStat(this.#connectionId, path, stat);
-    return stat;
+    return this.#stampReadOnly(stat);
   }
 
   /**
@@ -375,6 +375,23 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
       }
       this.#cache.invalidateChildren(this.#connectionId, dir.parent);
     }
+  }
+
+  /**
+   * A connection saved read-only reports every entry read-only, which is what
+   * `FileStat.readOnly` already means: "read-only for the current
+   * credentials". Refusing the write is only half of the flag — a host turns
+   * *this* into a read-only editor, and without it the user types into an
+   * ordinary one and discovers the refusal at save time.
+   *
+   * Applied on the way out rather than before `setStat`, so the cache keeps
+   * what the provider actually said. Two things depend on that: a cached stat
+   * outlives the wrapper that cached it — the same connection id is re-wrapped
+   * with a freshly read flag on the next connect — and `EntryCache.setListing`
+   * fills the stat cache from a listing, which never passes through here.
+   */
+  #stampReadOnly(stat: FileStat): FileStat {
+    return this.#readOnly ? { ...stat, readOnly: true } : stat;
   }
 
   async #exists(path: RemotePath, signal?: AbortSignal): Promise<boolean> {

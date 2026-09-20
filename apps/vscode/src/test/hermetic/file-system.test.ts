@@ -203,6 +203,16 @@ suite('a connection saved with readOnly: true', () => {
     await connection?.dispose();
   });
 
+  test('stats every entry as FilePermission.Readonly', async () => {
+    // The affordance half of the flag, and the one the user actually sees.
+    // VS Code decides an editor is read-only from `FileStat.permissions` and
+    // from nothing else — a rejected write only produces a failed-save dialog
+    // after the typing is done. `ManagedFileSystem` stamps `readOnly` on every
+    // stat for a read-only connection and the host maps it here.
+    const stat = await vscode.workspace.fs.stat(connection.uri('/readme.txt'));
+    assert.equal(stat.permissions, vscode.FilePermission.Readonly);
+  });
+
   test('still reads', async () => {
     // Read-only has to mean read-only, not broken.
     assert.equal(
@@ -237,8 +247,11 @@ suite('a connection saved with readOnly: true', () => {
 
   for (const [name, call] of refusals) {
     test(`refuses ${name} as NoPermissions`, async () => {
-      // NoPermissions is the code that makes VS Code show a read-only editor
-      // rather than a failed save, which is the whole point of the flag.
+      // NoPermissions is what an attempted write gets back. It does not make
+      // the editor read-only — VS Code takes that from `FileStat.permissions`,
+      // which the stat case above covers. This half is the backstop: a write
+      // that reaches the provider anyway, from a command rather than a
+      // keystroke, still has to be refused.
       await assert.rejects(call, (error: unknown) => isFileSystemError(error, 'NoPermissions'));
     });
   }
