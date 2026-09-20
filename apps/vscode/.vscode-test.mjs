@@ -38,6 +38,12 @@ export default defineConfig([
     files: 'out-test/live/**/*.test.js',
     // Longer again: suiteSetup here waits for the compose stack's one-shot
     // seed container to finish chowning the SFTP volume.
-    mocha: { ui: 'tdd', timeout: 60_000 },
+    //
+    // Strictly greater than that wait's own budget — `WRITABLE_BUDGET_MS` in
+    // live/bundled-sdk.test.ts — and that margin is load-bearing. At exactly
+    // 60_000 the two expire together and Mocha wins, so a stopped server
+    // reports `Timeout of 60000ms exceeded` instead of naming the server: a
+    // failure either way, but the one that does not say which server is down.
+    mocha: { ui: 'tdd', timeout: 90_000 },
   },
 ]);

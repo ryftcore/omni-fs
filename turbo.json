@@ -53,6 +53,15 @@
     },
     "package": {
       "dependsOn": ["^build"],
+      // Never cached. The script is `rm -rf out && esbuild --production &&
+      // vsce package`, so it writes `out/` as well as the .vsix — and `out/`
+      // is `build`'s declared output, not this task's. Declaring it here
+      // would put two tasks in charge of one directory holding different
+      // content. Leaving it undeclared and cacheable is worse: a cache hit
+      // replays the .vsix, skips the script, and leaves whatever dev bundle
+      // `build` last wrote in `out/` — which is what the live label then
+      // tests. A few seconds per run buys `package:vsix` meaning what it says.
+      "cache": false,
       "outputs": ["*.vsix"]
     }
   }

@@ -122,9 +122,15 @@ export async function removeConnection(id: string): Promise<void> {
 /**
  * Clears the global setting outright.
  *
- * Called from every suite's `suiteSetup`, not only its teardown: the runner's
- * user-data directory survives between local runs, so a crashed run leaves
- * entries behind and the next run fails for no visible reason.
+ * For absorbing what a crashed run left behind, which is why suites call it in
+ * `suiteSetup` and not only in teardown: the runner's user-data directory
+ * survives between local runs, so entries from a suite that never reached its
+ * teardown are still there on the next one and it fails for no visible reason.
+ *
+ * Not universal, and should not become so. A suite whose connection ids are
+ * unique per run — the live label builds one from `Date.now()` and the pid —
+ * cannot collide with a leftover, and calling this from it would delete the
+ * connections of whatever else is mid-run.
  */
 export async function resetConnections(): Promise<void> {
   await write([]);
