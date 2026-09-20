@@ -125,9 +125,11 @@ describe('verifyHostKey', () => {
 
 describe('fingerprint', () => {
   it('formats the key the way OpenSSH prints it, with no padding', () => {
-    const printed = fingerprint(ours);
-    expect(printed.startsWith('SHA256:')).toBe(true);
-    expect(printed).not.toContain('=');
+    // A known vector, not a shape. This string is the only thing a user can hold
+    // up against what a server's operator published before accepting an unseen
+    // host, so the digest has to be the right digest: a prefix-and-padding check
+    // passes just as happily for SHA-1 or MD5 under a `SHA256:` label.
+    expect(fingerprint(ours)).toBe('SHA256:SbqH4jcMnwXLFpW7tqVEzGdqTMq2WO8Yv+tAgCVyuI8');
   });
 });
 

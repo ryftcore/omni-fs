@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
-import type { ConnectionConfig, DirEntry, ProviderContext } from '@omni-fs/core';
+import type { ConnectionConfig, DirEntry, Logger, LogLevel, ProviderContext } from '@omni-fs/core';
 import { SftpFileSystem } from './sftp-file-system.js';
 import type {
   SftpAttrs,
@@ -32,8 +32,34 @@ export function notFound(): Error & { code: number } {
   return Object.assign(new Error('No such file'), { code: 2 });
 }
 
+/** SFTP status 4, `FAILURE` — the one status whose meaning only a call site knows. */
+export function failure(): Error & { code: number } {
+  return Object.assign(new Error('Failure'), { code: 4 });
+}
+
 export function connectionLost(): Error & { code: number } {
   return Object.assign(new Error('Connection lost'), { code: 7 });
+}
+
+interface LogEntry {
+  readonly level: LogLevel;
+  readonly message: string;
+}
+
+/**
+ * A logger that keeps what it was told, for the one hermetic case about
+ * something the provider only *says*: the warning a non-atomic rename owes the
+ * user. `NOOP_LOGGER` would let that warning disappear without a failing test.
+ */
+function capturingLogger(): { logger: Logger; entries: readonly LogEntry[] } {
+  const entries: LogEntry[] = [];
+  const logger: Logger = {
+    log: (level, message) => {
+      entries.push({ level, message });
+    },
+    child: () => logger,
+  };
+  return { logger, entries };
 }
 
 /** A session whose behaviour each test supplies; anything unset throws. */
@@ -66,23 +92,27 @@ export function fakeSession(
   } as SftpConnection;
 }
 
-export function context(settings: Readonly<Record<string, unknown>> = {}): ProviderContext {
+export function context(
+  settings: Readonly<Record<string, unknown>> = {},
+  logger: Logger = NOOP_LOGGER,
+): ProviderContext {
   const config: ConnectionConfig = {
     id: 'test-connection',
     providerId: 'sftp',
     label: 'Test',
     settings: { host: 'sftp.example.com', username: 'omnifs', ...settings },
   };
-  return { config, getSecret: async () => ({ password: 'secret' }), logger: NOOP_LOGGER };
+  return { config, getSecret: async () => ({ password: 'secret' }), logger };
 }
 
 /** A connected file system over the given session. */
 export async function connected(
   session: SftpConnection,
   settings: Readonly<Record<string, unknown>> = {},
+  logger: Logger = NOOP_LOGGER,
 ): Promise<{ fs: SftpFileSystem; opened: SftpSessionOptions[] }> {
   const opened: SftpSessionOptions[] = [];
-  const fs = new SftpFileSystem(context(settings), async (options) => {
+  const fs = new SftpFileSystem(context(settings, logger), async (options) => {
     opened.push(options);
     return session;
   });
@@ -366,6 +396,17 @@ describe('SftpFileSystem list', () => {
     );
   });
 
+  it('refuses an entry with no name at all', async () => {
+    const { fs } = await connected(
+      fakeSession({ readdir: async () => [{ filename: '', attrs: file() }] }),
+    );
+
+    await expect(collect(fs.list(RemotePath.parse('/docs')))).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'ProtocolError' && !error.retryable,
+    );
+  });
+
   it('keeps a name containing a backslash, which is a legal POSIX filename', async () => {
     const { fs } = await connected(
       fakeSession({ readdir: async () => [{ filename: 'back\\slash', attrs: file() }] }),
@@ -470,10 +511,6 @@ describe('SftpFileSystem reads', () => {
 });
 
 describe('SftpFileSystem writes', () => {
-  function failure(): Error & { code: number } {
-    return Object.assign(new Error('Failure'), { code: 4 });
-  }
-
   it('writes a file, truncating by default', async () => {
     const writes: { path: string; flags: string; body: string }[] = [];
     const { fs } = await connected(
@@ -513,6 +550,25 @@ describe('SftpFileSystem writes', () => {
       fs.writeFile(RemotePath.parse('/a.txt'), new Uint8Array(), { overwrite: false }),
     ).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  it('leaves a truncating write that failed as Unknown, because nothing was excluded', async () => {
+    // The other half of the `wx` narrowing, and the half that says the guard is
+    // doing work: a plain `w` write already overwrites, so status 4 from one is
+    // whatever else status 4 covers and must not be dressed up as
+    // `AlreadyExists` — an answer about the one condition this caller said it
+    // did not mind.
+    const { fs } = await connected(
+      fakeSession({
+        writeAll: async () => {
+          throw failure();
+        },
+      }),
+    );
+
+    await expect(fs.writeFile(RemotePath.parse('/a.txt'), new Uint8Array())).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Unknown',
     );
   });
 
@@ -616,10 +672,6 @@ describe('SftpFileSystem writes', () => {
 });
 
 describe('SftpFileSystem createDirectory', () => {
-  function failure(): Error & { code: number } {
-    return Object.assign(new Error('Failure'), { code: 4 });
-  }
-
   it('creates the whole chain, shallowest first', async () => {
     const made: string[] = [];
     const { fs } = await connected(fakeSession({ mkdir: async (p: string) => void made.push(p) }));
@@ -658,10 +710,6 @@ describe('SftpFileSystem createDirectory', () => {
 });
 
 describe('SftpFileSystem delete', () => {
-  function failure(): Error & { code: number } {
-    return Object.assign(new Error('Failure'), { code: 4 });
-  }
-
   it('unlinks a file', async () => {
     const unlinked: string[] = [];
     const { fs } = await connected(
@@ -788,13 +836,33 @@ describe('SftpFileSystem delete', () => {
     );
     expect(touched).toEqual([]);
   });
+
+  it('removes nothing at all when the server names an entry with no name', async () => {
+    // The worse half of the same guard. `RemotePath.join('')` normalises back to
+    // the directory itself, so before the refusal an empty entry meant either
+    // unlinking the directory being walked or recursing into it without end —
+    // and unlike `../../escape` an empty name needs no hostile server, only a
+    // length field nobody checked.
+    const touched: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => directory(),
+        readdir: async (path: string) =>
+          path === '/home/omnifs/tree' ? [{ filename: '', attrs: directory() }] : [],
+        unlink: async (path: string) => void touched.push(`unlink ${path}`),
+        rmdir: async (path: string) => void touched.push(`rmdir ${path}`),
+      }),
+    );
+
+    await expect(fs.delete(RemotePath.parse('/tree'), { recursive: true })).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'ProtocolError' && !error.retryable,
+    );
+    expect(touched).toEqual([]);
+  });
 });
 
 describe('SftpFileSystem rename', () => {
-  function failure(): Error & { code: number } {
-    return Object.assign(new Error('Failure'), { code: 4 });
-  }
-
   it('replaces the destination through the POSIX extension when the server has it', async () => {
     const calls: string[] = [];
     const { fs } = await connected(
@@ -811,6 +879,7 @@ describe('SftpFileSystem rename', () => {
   it('removes the destination first on a server without the extension, and says so is not atomic', async () => {
     const order: string[] = [];
     let renames = 0;
+    const { logger, entries } = capturingLogger();
     const { fs } = await connected(
       fakeSession({
         rename: async (from: string, to: string) => {
@@ -820,12 +889,24 @@ describe('SftpFileSystem rename', () => {
         },
         unlink: async (path: string) => void order.push(`unlink ${path}`),
       }),
+      {},
+      logger,
     );
 
     await fs.rename(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'));
     expect(order).toEqual([
       'unlink /home/omnifs/after.txt',
       'rename /home/omnifs/before.txt -> /home/omnifs/after.txt',
+    ]);
+
+    // The warning is the whole of "says so": the unlink/rename order is not
+    // visible to a caller, so this line is the only notice anyone gets that a
+    // reader who looked in between would have found nothing at the destination.
+    expect(entries.filter((entry) => entry.level === 'warn')).toEqual([
+      {
+        level: 'warn',
+        message: 'Replacing a rename destination without posix-rename, which is not atomic',
+      },
     ]);
   });
 
@@ -941,10 +1022,6 @@ describe('SftpFileSystem rename', () => {
 });
 
 describe('SftpFileSystem copy', () => {
-  function failure(): Error & { code: number } {
-    return Object.assign(new Error('Failure'), { code: 4 });
-  }
-
   it('copies on the server when copy-data is there', async () => {
     const calls: string[] = [];
     const { fs } = await connected(
@@ -977,6 +1054,26 @@ describe('SftpFileSystem copy', () => {
       fs.copy(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'), { overwrite: false }),
     ).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  it('leaves an overwriting copy that failed as Unknown, because nothing was excluded', async () => {
+    // As for `writeFile`: an overwriting copy asked for no exclusion, so status
+    // 4 from it is one of the other things status 4 covers and `AlreadyExists`
+    // would be an answer about a condition the caller said it did not mind.
+    const { fs } = await connected(
+      fakeSession(
+        {
+          copyData: async () => {
+            throw failure();
+          },
+        },
+        { posixRename: false, fsync: false, copyData: true },
+      ),
+    );
+
+    await expect(fs.copy(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Unknown',
     );
   });
 
