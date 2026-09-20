@@ -106,10 +106,21 @@ const webview = {
  * bundle that never contained the new file.
  */
 function testEntryPoints() {
-  return readdirSync('src/test', { recursive: true })
+  const entries = readdirSync('src/test', { recursive: true })
     .map((entry) => String(entry).replaceAll('\\', '/'))
     .filter((name) => name.endsWith('.test.ts'))
     .map((name) => `src/test/${name}`);
+
+  // A glob that matches nothing is a silent green, not an error, at every
+  // step after this one: esbuild builds `entryPoints: []` without complaint,
+  // and @vscode/test-cli treats a `files` pattern matching no file as a run
+  // that passed. So renaming or moving `src/test/hermetic/` or `src/test/live/`
+  // would leave both CI jobs reporting success over zero assertions — and the
+  // live job's production-bundle guard disappears with them, since that guard
+  // is itself one of the files that stopped matching. Fail loudly instead.
+  if (!entries.length) throw new Error('No *.test.ts under src/test — the test glob is broken.');
+
+  return entries;
 }
 
 /** @type {import('esbuild').BuildOptions} */
