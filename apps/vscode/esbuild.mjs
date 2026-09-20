@@ -98,12 +98,12 @@ const webview = {
  * `out-test/`, which is what the two `files` globs in `.vscode-test.mjs`
  * select on.
  *
- * The entry set is a snapshot, taken once when this module loads. esbuild then
- * watches the import graph of the entries it was handed, so under `--watch` an
- * *edit* to a test file rebuilds but a *new* test file is never picked up:
- * restart the watcher after adding one. `test:extension` runs `--tests-only`
- * first for exactly this reason — otherwise a suite can report green over a
- * bundle that never contained the new file.
+ * The entry set is a snapshot, taken once when a test build is assembled.
+ * esbuild then watches the import graph of the entries it was handed, so under
+ * `--watch` an *edit* to a test file rebuilds but a *new* test file is never
+ * picked up: restart the watcher after adding one. `test:extension` runs
+ * `--tests-only` first for exactly this reason — otherwise a suite can report
+ * green over a bundle that never contained the new file.
  */
 function testEntryPoints() {
   const entries = readdirSync('src/test', { recursive: true })
@@ -123,24 +123,36 @@ function testEntryPoints() {
   return entries;
 }
 
-/** @type {import('esbuild').BuildOptions} */
-const tests = {
-  ...shared,
-  entryPoints: testEntryPoints(),
-  outdir: 'out-test',
-  outbase: 'src/test',
-  platform: 'node',
-  format: 'cjs',
-  target: 'node22',
-  external: nodeExternals,
-  sourcemap: true,
-  minify: false,
-};
+/**
+ * Built on demand rather than at module load, so the entry-point scan — and
+ * the guard inside it — only runs when tests are actually being built. At
+ * module load it also ran for `--production`, which made a broken test glob
+ * fail `pnpm package:vsix` with a message about tests. Every path that does
+ * build tests still reaches it: `--tests-only` (`build:tests`, and so both
+ * `vscode-test` labels and the CI jobs that call them) and `--tests` (the F5
+ * watch loop).
+ *
+ * @returns {import('esbuild').BuildOptions}
+ */
+function testBuild() {
+  return {
+    ...shared,
+    entryPoints: testEntryPoints(),
+    outdir: 'out-test',
+    outbase: 'src/test',
+    platform: 'node',
+    format: 'cjs',
+    target: 'node22',
+    external: nodeExternals,
+    sourcemap: true,
+    minify: false,
+  };
+}
 
 const targets = testsOnly
-  ? [tests]
+  ? [testBuild()]
   : withTests
-    ? [extension, webview, tests]
+    ? [extension, webview, testBuild()]
     : [extension, webview];
 
 // esbuild writes into outdir without emptying it, so a deleted or renamed
