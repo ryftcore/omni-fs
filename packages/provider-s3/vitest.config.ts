@@ -1,9 +1,8 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
-// `dist/**` is named because vitest's defaults do not cover it and the packages
-// emit there. Mirrors `packages/provider-webdav/vitest.config.ts`, which adds
-// the live-test exclusion this package will need once it grows a conformance
-// run against MinIO.
+// Live tests need the compose stack, so the default run excludes them and
+// `pnpm test` stays hermetic. `dist/**` is named as well because vitest's
+// defaults do not cover it and the packages emit there.
 export default defineConfig({
-  test: { exclude: [...configDefaults.exclude, '**/dist/**'] },
+  test: { exclude: [...configDefaults.exclude, '**/dist/**', '**/*.live.test.ts'] },
 });
