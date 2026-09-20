@@ -93,10 +93,10 @@ that form is the common one. Leave it empty and the connection starts in the
 account's home directory instead, which is empty on this image.
 
 Host keys: the provider reads `~/.ssh/known_hosts` and refuses a host listed
-there with a different key. `localhost:2222` is normally absent, so the first
-connection is accepted and its fingerprint logged. If you have an old entry for
-that port from another project, delete it or point `known_hosts file` at
-somewhere else.
+there with a different key of the same type. `localhost:2222` is normally
+absent, so the first connection is accepted and its fingerprint logged. If you
+have an old entry for that port from another project, delete it or point
+`known_hosts file` at somewhere else.
 
 Built from `docker/sftp/Dockerfile` rather than pulled: the common SFTP images
 are amd64-only, so they emulate on Apple Silicon.

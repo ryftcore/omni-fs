@@ -28,7 +28,7 @@ export const SFTP_SETTINGS_SCHEMA: SettingsSchema = {
       kind: 'file',
       key: 'knownHostsPath',
       label: 'known_hosts file',
-      help: 'Optional. Defaults to ~/.ssh/known_hosts. A host listed there with a different key is refused.',
+      help: 'Optional. Defaults to ~/.ssh/known_hosts. A host listed there with a different key of the same type is refused.',
     },
     {
       kind: 'text',
