@@ -29,6 +29,14 @@ const shared = {
  * falls back to its pure-JS crypto, so an unresolved require at runtime is the
  * outcome that was already chosen — bundling must not turn it into a build
  * failure.
+ *
+ * `*.node` is external for the mirror-image reason. `ssh2`'s install script
+ * *is* allowed, so on a machine with a C++ toolchain — every CI runner —
+ * `sshcrypto.node` exists, and esbuild has no loader for a native binary. The
+ * require sits in the same `try` as `cpu-features`, and a bundled `.vsix`
+ * cannot ship one runner's architecture anyway, so leaving it unresolved is
+ * again the outcome already chosen. Without this the build passes on a machine
+ * that never built the binding and fails on one that did.
  */
 /** @type {import('esbuild').BuildOptions} */
 const extension = {
@@ -38,7 +46,7 @@ const extension = {
   platform: 'node',
   format: 'cjs',
   target: 'node22',
-  external: ['vscode', 'cpu-features'],
+  external: ['vscode', 'cpu-features', '*.node'],
 };
 
 /**
