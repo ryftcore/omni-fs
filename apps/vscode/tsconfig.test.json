@@ -1,0 +1,20 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Same shape as the extension's own program (tsconfig.json): esbuild does
+    // the bundling, tsc only type checks. The one difference is "mocha".
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "composite": false,
+    "incremental": false,
+    "declaration": false,
+    "declarationMap": false,
+    // "mocha" must NOT go in the extension's own program. It makes suite,
+    // test, setup and teardown ambient in every file, which is exactly what
+    // tsconfig.json rejects for "dom": a stray global should be a compile
+    // error there, not a silent pass.
+    "types": ["node", "vscode", "mocha"]
+  },
+  "include": ["src/test/**/*.ts"]
+}

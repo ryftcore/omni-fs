@@ -6,7 +6,21 @@ import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
 
 export default tseslint.config(
-  { ignores: ['**/dist/**', '**/out/**', '**/node_modules/**', '**/.turbo/**', '**/coverage/**'] },
+  // Generated or downloaded, never authored. `out-test/**` is the extension
+  // test bundle (esbuild.mjs --tests); `.vscode-test/**` is the editor that
+  // `vscode-test` downloads into apps/vscode, which ships its own tsconfigs
+  // and would otherwise make typescript-eslint's project root ambiguous.
+  {
+    ignores: [
+      '**/dist/**',
+      '**/out/**',
+      '**/out-test/**',
+      '**/node_modules/**',
+      '**/.turbo/**',
+      '**/coverage/**',
+      '**/.vscode-test/**',
+    ],
+  },
 
   js.configs.recommended,
   ...tseslint.configs.recommended,

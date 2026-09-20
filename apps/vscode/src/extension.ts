@@ -17,6 +17,26 @@ import { TransfersTreeProvider } from './views/transfers-tree.js';
 import { registerCommands } from './commands/index.js';
 
 /**
+ * What `activate` resolves to.
+ *
+ * A genuine public extension API, not only a test hook: `ProviderRegistry` is
+ * already the documented extension point — "a new protocol is a new package
+ * plus one `register()` call per host" — so publishing it means a third-party
+ * extension can add a protocol with the same line this function uses below.
+ * Unstable before 1.0.
+ *
+ * It deliberately does not carry the `SecretStore`, but be clear about how
+ * small that is: `registry.get('sftp')` hands back the live definition, whose
+ * `create` receives `getSecret`. `register()` freezes what it stores, which
+ * closes the in-place swap; VS Code does not isolate extensions from one
+ * another, so nothing here can close co-residency. Withholding the secret
+ * store is hygiene, not a boundary.
+ */
+export interface OmniFsApi {
+  readonly registry: ProviderRegistry;
+}
+
+/**
  * Composition root.
  *
  * Note what this function does and does not do. It constructs core services,
@@ -28,7 +48,7 @@ import { registerCommands } from './commands/index.js';
  * different adapters. If a future change makes that stop being true, the change
  * is in the wrong layer.
  */
-export function activate(context: vscode.ExtensionContext): void {
+export function activate(context: vscode.ExtensionContext): OmniFsApi {
   const settings = vscode.workspace.getConfiguration('omniFs');
 
   const channel = vscode.window.createOutputChannel('Omni-FS', { log: true });
@@ -97,6 +117,8 @@ export function activate(context: vscode.ExtensionContext): void {
   logger.log('info', 'Omni-FS activated', {
     providers: registry.list().map((provider) => provider.id),
   });
+
+  return { registry };
 }
 
 export function deactivate(): void {

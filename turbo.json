@@ -28,6 +28,26 @@
       "cache": false,
       "outputs": []
     },
+    "build:tests": {
+      "dependsOn": ["^build"],
+      "outputs": ["out-test/**"]
+    },
+    "test:extension": {
+      "dependsOn": ["build", "build:tests"],
+      "cache": false,
+      "outputs": []
+    },
+    "test:extension:live": {
+      // Deliberately NOT ["build", "build:tests"], unlike the hermetic label
+      // above. The live label's whole claim is about the artifact that ships,
+      // so it runs against the minified bundle `package` left in `out/`; an
+      // edge to `build` would overwrite that with a dev bundle and the run
+      // would prove something else. The hermetic label makes no such claim,
+      // so a dev bundle is fine there and `build` keeps it self-contained.
+      "dependsOn": ["build:tests"],
+      "cache": false,
+      "outputs": []
+    },
     "clean": {
       "cache": false
     },

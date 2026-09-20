@@ -8,6 +8,18 @@
       "args": ["--extensionDevelopmentPath=${workspaceFolder}/apps/vscode"],
       "outFiles": ["${workspaceFolder}/apps/vscode/out/**/*.js"],
       "preLaunchTask": "npm: build"
+    },
+    {
+      "name": "Extension tests (hermetic)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/apps/vscode",
+        "--extensionTestsPath=${workspaceFolder}/apps/vscode/out-test/hermetic",
+        "${workspaceFolder}/apps/vscode/src/test/fixtures/workspace"
+      ],
+      "outFiles": ["${workspaceFolder}/apps/vscode/out-test/**/*.js"],
+      "preLaunchTask": "npm: build:tests - apps/vscode"
     }
   ]
 }
