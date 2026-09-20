@@ -8,6 +8,7 @@ import {
   ListObjectsV2Command,
   PutObjectCommand,
   S3Client,
+  type S3ClientConfig,
   type ServerSideEncryption,
   type StorageClass,
 } from '@aws-sdk/client-s3';
@@ -47,6 +48,20 @@ import { openUploadStream, writeConditions } from './upload-stream.js';
  * Declaring `hasRealDirectories: false` is what tells the rest of the system to
  * expect all of that, rather than every caller special-casing S3.
  */
+/**
+ * Construction options. The only member is a test seam.
+ *
+ * `connect()` builds its own `S3Client` from the connection's settings and
+ * credentials, which is what production wants and what leaves the class
+ * unreachable from a test — every branch below would need a bucket. Injecting
+ * the construction is the narrowest way to open it. Nothing in the product
+ * passes this; `provider-webdav` opens the same kind of seam with its
+ * `PutClient` and `WriteStreamClient` types.
+ */
+export interface S3FileSystemOptions {
+  readonly createClient?: ((config: S3ClientConfig) => S3Client) | undefined;
+}
+
 export class S3FileSystem implements RemoteFileSystem {
   readonly capabilities: ProviderCapabilities = {
     canWrite: true,
@@ -68,12 +83,14 @@ export class S3FileSystem implements RemoteFileSystem {
   readonly #context: ProviderContext;
   readonly #settings: S3Settings;
   readonly #logger: Logger;
+  readonly #createClient: (config: S3ClientConfig) => S3Client;
   #client: S3Client | undefined;
 
-  constructor(context: ProviderContext) {
+  constructor(context: ProviderContext, options: S3FileSystemOptions = {}) {
     this.#context = context;
     this.#settings = readSettings(context.config.settings);
     this.#logger = context.logger;
+    this.#createClient = options.createClient ?? ((config) => new S3Client(config));
   }
 
   async connect(signal?: AbortSignal): Promise<void> {
@@ -84,7 +101,7 @@ export class S3FileSystem implements RemoteFileSystem {
     const secretAccessKey = requireString(secret, 'secretAccessKey');
     const sessionToken = optionalString(secret, 'sessionToken');
 
-    this.#client = new S3Client({
+    this.#client = this.#createClient({
       region: this.#settings.region,
       ...(this.#settings.endpoint !== undefined ? { endpoint: this.#settings.endpoint } : {}),
       forcePathStyle: this.#settings.forcePathStyle,
