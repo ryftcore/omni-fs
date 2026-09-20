@@ -128,6 +128,13 @@ which is what stops "universal" drifting into four different implementations.
 Tests skip themselves based on declared capabilities, so a provider is only
 penalised for lying.
 
+`RemotePath` and the slash helpers under `packages/core/src/util/` also carry
+`*.property.test.ts` files, written with `fast-check`. They hold the invariants
+documented on those types against generated input rather than a listed handful
+— the slash ones keep the regular expression they replaced as an oracle, since
+"the rewrite means the same thing" is a claim about every string. Scorecard
+counts property-based testing as fuzzing, which is the other reason they exist.
+
 `MemoryFileSystem` is a complete in-memory provider whose capabilities can be
 overridden to impersonate any protocol. `pnpm test` runs the suite against it
 twice — full-featured, then pinned to an object-store profile — which is what

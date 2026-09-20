@@ -45,6 +45,7 @@ updates:
           - '@eslint/*'
           - 'prettier'
           - 'vitest'
+          - 'fast-check'
           - 'turbo'
           - 'esbuild'
           - '@types/*'
