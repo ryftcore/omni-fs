@@ -1734,7 +1734,7 @@ function toAttrs(stats: Stats): SftpAttrs {
 - [ ] **Step 4: Run the test**
 
 Run: `pnpm build && pnpm --filter @omni-fs/provider-sftp exec vitest run src/sftp-session.test.ts`
-Expected: PASS, 10 tests.
+Expected: PASS, 12 tests — the ten below plus the two `isAlive`/`close` cases correction 3 above calls for.
 
 Checked against `@types/ssh2@1.15.6` while planning, so these should compile as written: `Callback = (err?: Error | null) => void`, `readdir` yields `FileEntryWithStats[]` whose `attrs` is a `Stats`, `Attributes` declares `mode`/`uid`/`gid`/`size`/`atime`/`mtime` as required numbers, `ext_openssh_rename`/`ext_openssh_fsync`/`ext_copy_data` are all declared, and `SyncHostVerifier` is `(key: Buffer) => boolean`.
 
@@ -2154,7 +2154,7 @@ Add to `SftpSession`, after `realpath`:
 - [ ] **Step 5: Run the tests**
 
 Run: `pnpm build && pnpm --filter @omni-fs/provider-sftp exec vitest run src/sftp-session.test.ts`
-Expected: PASS, 19 tests.
+Expected: PASS, 21 tests (Task 5's 12 plus the 9 here).
 
 - [ ] **Step 6: Commit**
 
