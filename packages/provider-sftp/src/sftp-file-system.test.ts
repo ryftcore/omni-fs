@@ -616,3 +616,236 @@ describe('SftpFileSystem createDirectory', () => {
     );
   });
 });
+
+describe('SftpFileSystem delete', () => {
+  function failure(): Error & { code: number } {
+    return Object.assign(new Error('Failure'), { code: 4 });
+  }
+
+  it('unlinks a file', async () => {
+    const unlinked: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => file(),
+        unlink: async (path: string) => void unlinked.push(path),
+      }),
+    );
+
+    await fs.delete(RemotePath.parse('/a.txt'));
+    expect(unlinked).toEqual(['/home/omnifs/a.txt']);
+  });
+
+  it('unlinks a symlink instead of following it, even when it points at a directory', async () => {
+    const unlinked: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => link(),
+        stat: async () => directory(),
+        unlink: async (path: string) => void unlinked.push(path),
+      }),
+    );
+
+    await fs.delete(RemotePath.parse('/current'));
+    expect(unlinked).toEqual(['/home/omnifs/current']);
+  });
+
+  it('removes an empty directory', async () => {
+    const removed: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => directory(),
+        rmdir: async (path: string) => void removed.push(path),
+      }),
+    );
+
+    await fs.delete(RemotePath.parse('/empty'));
+    expect(removed).toEqual(['/home/omnifs/empty']);
+  });
+
+  it('refuses to remove a directory that still has children', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => directory(),
+        rmdir: async () => {
+          throw failure();
+        },
+      }),
+    );
+
+    await expect(fs.delete(RemotePath.parse('/full'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'NotEmpty',
+    );
+  });
+
+  it('walks a tree depth-first when asked to be recursive', async () => {
+    const order: string[] = [];
+    const tree: Record<string, { filename: string; attrs: SftpAttrs }[]> = {
+      '/home/omnifs/tree': [
+        { filename: 'one.txt', attrs: file() },
+        { filename: 'nested', attrs: directory() },
+      ],
+      '/home/omnifs/tree/nested': [{ filename: 'two.txt', attrs: file() }],
+    };
+
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => directory(),
+        readdir: async (path: string) => tree[path] ?? [],
+        unlink: async (path: string) => void order.push(`unlink ${path}`),
+        rmdir: async (path: string) => void order.push(`rmdir ${path}`),
+      }),
+    );
+
+    await fs.delete(RemotePath.parse('/tree'), { recursive: true });
+    expect(order).toEqual([
+      'unlink /home/omnifs/tree/one.txt',
+      'unlink /home/omnifs/tree/nested/two.txt',
+      'rmdir /home/omnifs/tree/nested',
+      'rmdir /home/omnifs/tree',
+    ]);
+  });
+
+  it('unlinks a symlink inside a tree rather than deleting what it points at', async () => {
+    const order: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        lstat: async () => directory(),
+        readdir: async (path: string) =>
+          path === '/home/omnifs/tree' ? [{ filename: 'current', attrs: link() }] : [],
+        stat: async () => directory(),
+        unlink: async (path: string) => void order.push(`unlink ${path}`),
+        rmdir: async (path: string) => void order.push(`rmdir ${path}`),
+      }),
+    );
+
+    await fs.delete(RemotePath.parse('/tree'), { recursive: true });
+    expect(order).toEqual(['unlink /home/omnifs/tree/current', 'rmdir /home/omnifs/tree']);
+  });
+});
+
+describe('SftpFileSystem rename', () => {
+  function failure(): Error & { code: number } {
+    return Object.assign(new Error('Failure'), { code: 4 });
+  }
+
+  it('replaces the destination through the POSIX extension when the server has it', async () => {
+    const calls: string[] = [];
+    const { fs } = await connected(
+      fakeSession(
+        { posixRename: async (from: string, to: string) => void calls.push(`${from} -> ${to}`) },
+        { posixRename: true, fsync: false, copyData: false },
+      ),
+    );
+
+    await fs.rename(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'));
+    expect(calls).toEqual(['/home/omnifs/before.txt -> /home/omnifs/after.txt']);
+  });
+
+  it('removes the destination first on a server without the extension, and says so is not atomic', async () => {
+    const order: string[] = [];
+    let renames = 0;
+    const { fs } = await connected(
+      fakeSession({
+        rename: async (from: string, to: string) => {
+          renames += 1;
+          if (renames === 1) throw failure();
+          order.push(`rename ${from} -> ${to}`);
+        },
+        unlink: async (path: string) => void order.push(`unlink ${path}`),
+      }),
+    );
+
+    await fs.rename(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'));
+    expect(order).toEqual([
+      'unlink /home/omnifs/after.txt',
+      'rename /home/omnifs/before.txt -> /home/omnifs/after.txt',
+    ]);
+  });
+
+  it('reports an occupied destination as AlreadyExists when overwrite is false', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        rename: async () => {
+          throw failure();
+        },
+      }),
+    );
+
+    await expect(
+      fs.rename(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'), { overwrite: false }),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  it('never replaces a destination when overwrite is false, even with the extension', async () => {
+    let posix = 0;
+    const { fs } = await connected(
+      fakeSession(
+        {
+          posixRename: async () => void (posix += 1),
+          rename: async () => undefined,
+        },
+        { posixRename: true, fsync: false, copyData: false },
+      ),
+    );
+
+    await fs.rename(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'), { overwrite: false });
+    expect(posix).toBe(0);
+  });
+});
+
+describe('SftpFileSystem copy', () => {
+  function failure(): Error & { code: number } {
+    return Object.assign(new Error('Failure'), { code: 4 });
+  }
+
+  it('copies on the server when copy-data is there', async () => {
+    const calls: string[] = [];
+    const { fs } = await connected(
+      fakeSession(
+        {
+          copyData: async (from: string, to: string, flags: string) =>
+            void calls.push(`${from} -> ${to} (${flags})`),
+        },
+        { posixRename: false, fsync: false, copyData: true },
+      ),
+    );
+
+    await fs.copy(RemotePath.parse('/source.txt'), RemotePath.parse('/copy.txt'));
+    expect(calls).toEqual(['/home/omnifs/source.txt -> /home/omnifs/copy.txt (w)']);
+  });
+
+  it('reports an occupied destination as AlreadyExists', async () => {
+    const { fs } = await connected(
+      fakeSession(
+        {
+          copyData: async () => {
+            throw failure();
+          },
+        },
+        { posixRename: false, fsync: false, copyData: true },
+      ),
+    );
+
+    await expect(
+      fs.copy(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'), { overwrite: false }),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  it('passes the session Unsupported through on a server without the extension', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        copyData: async () => {
+          throw OmniFsError.unsupported('server-side copy', 'sftp');
+        },
+      }),
+    );
+
+    await expect(fs.copy(RemotePath.parse('/a.txt'), RemotePath.parse('/b.txt'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Unsupported',
+    );
+  });
+});

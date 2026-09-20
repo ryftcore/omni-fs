@@ -4,6 +4,7 @@ import type {
   DirEntry,
   FileStat,
   Logger,
+  OverwriteOptions,
   ProviderCapabilities,
   ProviderContext,
   ReadOptions,
@@ -354,13 +355,155 @@ export class SftpFileSystem implements RemoteFileSystem {
     });
   }
 
-  // Deleting is not implemented yet. `RemoteFileSystem` requires it, so it is
-  // declared and says plainly that it does nothing rather than failing in some
-  // protocol-flavoured way. `capabilities` above already promises the
-  // operation, so an `Unsupported` from here is a gap in this class, not a
-  // claim about the protocol.
-  async delete(_path: RemotePath, _options?: DeleteOptions): Promise<void> {
-    throw OmniFsError.unsupported('deleting', 'sftp');
+  /**
+   * `unlink` for anything that is not a directory, `rmdir` for an empty one, and
+   * a walk when the caller asked for recursion.
+   *
+   * The type comes from `lstat`, not `stat`: a symlink — even one pointing at a
+   * directory — is unlinked, which is what `rm` does and the only answer that
+   * cannot destroy something outside the tree.
+   *
+   * A non-recursive delete of a non-empty directory is status 4 from `rmdir`,
+   * narrowed here to `NotEmpty`. Without that narrowing a caller who asked to
+   * remove an empty directory could not tell "not empty" from any other refusal.
+   */
+  async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
+    const session = this.#requireSession();
+    const signal = options?.signal;
+    const attrs = await this.#run(() => session.lstat(this.#remote(path), signal), path);
+
+    if (toFileType(attrs.mode) !== 'directory') {
+      await this.#run(() => session.unlink(this.#remote(path), signal), path);
+      return;
+    }
+
+    if (options?.recursive === true) {
+      await this.#deleteTree(session, path, signal);
+      return;
+    }
+
+    try {
+      await session.rmdir(this.#remote(path), signal);
+    } catch (error) {
+      if (!isFailure(error)) throw toOmniFsError(error, path.value);
+      throw new OmniFsError({
+        code: 'NotEmpty',
+        message: `Directory is not empty: ${path.value}`,
+        path: path.value,
+        providerId: 'sftp',
+        cause: error,
+      });
+    }
+  }
+
+  /**
+   * Depth-first, children before their parent, because `SSH_FXP_RMDIR` only
+   * removes an empty directory.
+   *
+   * `readdir` deliberately, not `list`: `list` resolves symlinks, and a recursive
+   * delete that followed one would delete the link's *target* — a file outside
+   * the tree the caller asked to remove.
+   */
+  async #deleteTree(
+    session: SftpConnection,
+    path: RemotePath,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const entries = (
+      await this.#run(() => session.readdir(this.#remote(path), signal), path)
+    ).filter((entry) => entry.filename !== '.' && entry.filename !== '..');
+
+    for (const entry of entries) {
+      const child = path.join(entry.filename);
+      if (toFileType(entry.attrs.mode) === 'directory') {
+        await this.#deleteTree(session, child, signal);
+      } else {
+        await this.#run(() => session.unlink(this.#remote(child), signal), child);
+      }
+    }
+
+    await this.#run(() => session.rmdir(this.#remote(path), signal), path);
+  }
+
+  /**
+   * A real server-side rename: no read-back, no re-upload.
+   *
+   * With `overwrite: false`, plain `SSH_FXP_RENAME` is exactly right — it fails
+   * when the destination exists, and status 4 then means `AlreadyExists`.
+   * Overwriting needs `posix-rename@openssh.com`, which replaces atomically. On a
+   * server without it the destination has to be unlinked first, which is a race
+   * — a reader in between sees nothing at `to` — so it is logged as the
+   * non-atomic fallback it is rather than presented as a rename.
+   */
+  async rename(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
+    const session = this.#requireSession();
+    const signal = options?.signal;
+
+    if (options?.overwrite === false) {
+      try {
+        await session.rename(this.#remote(from), this.#remote(to), signal);
+      } catch (error) {
+        if (!isFailure(error)) throw toOmniFsError(error, from.value);
+        throw this.#occupiedError(to, error);
+      }
+      return;
+    }
+
+    if (session.extensions.posixRename) {
+      await this.#run(
+        () => session.posixRename(this.#remote(from), this.#remote(to), signal),
+        from,
+      );
+      return;
+    }
+
+    try {
+      await session.rename(this.#remote(from), this.#remote(to), signal);
+    } catch (error) {
+      if (!isFailure(error)) throw toOmniFsError(error, from.value);
+      this.#logger.log(
+        'warn',
+        'Replacing a rename destination without posix-rename, which is not atomic',
+        { from: from.value, to: to.value },
+      );
+      await this.#run(() => session.unlink(this.#remote(to), signal), to);
+      await this.#run(() => session.rename(this.#remote(from), this.#remote(to), signal), from);
+    }
+  }
+
+  /**
+   * `copy-data`, the server-side copy the `canCopyServerSide` getter promises
+   * when the server announced the extension. The session raises `Unsupported`
+   * when it did not, and `ManagedFileSystem` streams the copy instead because it
+   * checks the same flag before calling this.
+   */
+  async copy(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
+    const session = this.#requireSession();
+    const flags: SftpWriteFlags = options?.overwrite === false ? 'wx' : 'w';
+
+    try {
+      await session.copyData(this.#remote(from), this.#remote(to), flags, options?.signal);
+    } catch (error) {
+      if (flags === 'wx' && isFailure(error)) throw this.#occupiedError(to, error);
+      throw toOmniFsError(error, from.value);
+    }
+  }
+
+  /**
+   * Status 4 on a destination the caller asked us not to replace.
+   *
+   * Constructed here rather than through `OmniFsError.alreadyExists`, which
+   * drops `providerId` — everything this package raises names the provider it
+   * came from, as `#writeError` and `createDirectory` already do.
+   */
+  #occupiedError(to: RemotePath, cause: unknown): OmniFsError {
+    return new OmniFsError({
+      code: 'AlreadyExists',
+      message: `Already exists: ${to.value}`,
+      path: to.value,
+      providerId: 'sftp',
+      cause,
+    });
   }
 
   async [Symbol.asyncDispose](): Promise<void> {

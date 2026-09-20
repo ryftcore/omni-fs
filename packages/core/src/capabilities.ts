@@ -16,7 +16,16 @@ export interface ProviderCapabilities {
   readonly canCopyServerSide: boolean;
   /** Explicit directory creation. Meaningless on pure object stores. */
   readonly canCreateDirectory: boolean;
-  /** Recursive delete in one call, rather than walk-and-delete by the client. */
+  /**
+   * Whether the provider handles `recursive: true` on `delete` itself, rather
+   * than leaving `ManagedFileSystem` to walk the tree and delete leaf by leaf.
+   *
+   * It is not a promise of one server call, and never was: `provider-s3`
+   * enumerates the prefix and deletes in batches, and `provider-sftp` walks with
+   * `readdir` and `unlink`, because neither protocol has a recursive remove. What
+   * true promises is that asking this provider to delete a tree works — which is
+   * the only thing its one reader asks (`fs/managed-file-system.ts`).
+   */
   readonly canDeleteRecursive: boolean;
   /** Appending to an existing file. FTP `APPE`, SFTP open-append. */
   readonly canAppend: boolean;
