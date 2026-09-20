@@ -158,24 +158,36 @@ export class ConnectionManager implements AsyncDisposable {
     }
 
     this.#setState(id, { status: 'connecting' });
-    const definition = this.#options.registry.get(config.providerId);
-    const logger = this.#options.logger.child(`${config.providerId}:${config.label}`);
 
-    const fs = definition.create({
-      config,
-      getSecret: async () => {
-        const secret = await this.#options.secretStore.get(id);
-        if (secret === undefined) {
-          throw new OmniFsError({
-            code: 'AuthenticationFailed',
-            message: `No stored credentials for "${config.label}".`,
-            providerId: config.providerId,
-          });
-        }
-        return secret;
-      },
-      logger,
-    });
+    let fs: RemoteFileSystem;
+    try {
+      const definition = this.#options.registry.get(config.providerId);
+      const logger = this.#options.logger.child(`${config.providerId}:${config.label}`);
+
+      fs = definition.create({
+        config,
+        getSecret: async () => {
+          const secret = await this.#options.secretStore.get(id);
+          if (secret === undefined) {
+            throw new OmniFsError({
+              code: 'AuthenticationFailed',
+              message: `No stored credentials for "${config.label}".`,
+              providerId: config.providerId,
+            });
+          }
+          return secret;
+        },
+        logger,
+      });
+    } catch (error) {
+      // An unregistered provider id, or a provider that validates its settings
+      // in its constructor. Neither reaches `connect`, so leaving this outside
+      // the guard parks the connection on `connecting` for the rest of the
+      // session — a permanent spinner the user cannot tell from a slow server.
+      const wrapped = OmniFsError.wrap(error, { providerId: config.providerId });
+      this.#setState(id, { status: 'error', error: wrapped.message, at: Date.now() });
+      throw wrapped;
+    }
 
     try {
       await fs.connect(signal);
