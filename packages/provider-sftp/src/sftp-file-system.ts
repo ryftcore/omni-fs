@@ -11,7 +11,7 @@ import type {
   RemotePath,
   WriteOptions,
 } from '@omni-fs/core';
-import { toOmniFsError } from './errors.js';
+import { isFailure, toOmniFsError } from './errors.js';
 import { readSettings, type SftpSettings } from './settings.js';
 import {
   buildRange,
@@ -21,7 +21,12 @@ import {
   toFileType,
   translateReadStream,
 } from './sftp-helpers.js';
-import { SftpSession, type OpenSession, type SftpConnection } from './sftp-session.js';
+import {
+  SftpSession,
+  type OpenSession,
+  type SftpConnection,
+  type SftpWriteFlags,
+} from './sftp-session.js';
 
 /**
  * SFTP over SSH.
@@ -230,15 +235,130 @@ export class SftpFileSystem implements RemoteFileSystem {
     return translateReadStream(stream, path.value);
   }
 
-  // Writing and deleting are not implemented yet. `RemoteFileSystem` requires
-  // both, so they are declared and each says plainly that it does nothing
-  // rather than failing in some protocol-flavoured way. `capabilities` above
-  // already promises both operations, so an `Unsupported` from here is a gap
-  // in this class, not a claim about the protocol.
-  async writeFile(_path: RemotePath, _data: Uint8Array, _options?: WriteOptions): Promise<void> {
-    throw OmniFsError.unsupported('writing a file', 'sftp');
+  /**
+   * `overwrite: false` is `wx`, so the exclusion is the server's. Unlike
+   * `provider-webdav`, which has to check first and race, nothing here can slip
+   * between the check and the write — there is no check.
+   */
+  async writeFile(path: RemotePath, data: Uint8Array, options?: WriteOptions): Promise<void> {
+    const session = this.#requireSession();
+    const flags = writeFlags(options);
+
+    await this.#withParents(path, flags, options, (remote) =>
+      session.writeAll(remote, data, flags, options?.signal),
+    );
+
+    options?.onProgress?.(data.byteLength, data.byteLength);
   }
 
+  /**
+   * A streamed write, for a file too large to hold in memory.
+   *
+   * `createParents` works here where it cannot on WebDAV's streamed PUT: the
+   * handle is opened before the first byte, so a missing parent is known while
+   * there is still something to retry. `onProgress` is not reported — the caller
+   * is the one feeding the stream, so it already knows how much it has written.
+   */
+  async createWriteStream(
+    path: RemotePath,
+    options?: WriteOptions,
+  ): Promise<WritableStream<Uint8Array>> {
+    const session = this.#requireSession();
+    const flags = writeFlags(options);
+
+    return this.#withParents(path, flags, options, (remote) =>
+      session.openWriteStream(remote, flags, options?.signal),
+    );
+  }
+
+  /**
+   * `SSH_FXP_MKDIR` one level at a time, shallowest first, because a server
+   * answers "no such file" for a missing parent and there is no recursive form.
+   *
+   * An existing directory is not an error: that matches `MemoryFileSystem`, the
+   * contract's reference, where creating one twice is a no-op. Status 4 is the
+   * only answer a server gives for "something is already here", and it does not
+   * say what, so one `stat` decides between the no-op and `AlreadyExists`.
+   */
+  async createDirectory(path: RemotePath, signal?: AbortSignal): Promise<void> {
+    const session = this.#requireSession();
+
+    const chain: RemotePath[] = [];
+    for (let current = path; !current.isRoot; current = current.parent) chain.unshift(current);
+
+    for (const directory of chain) {
+      try {
+        await session.mkdir(this.#remote(directory), signal);
+      } catch (error) {
+        if (!isFailure(error)) throw toOmniFsError(error, directory.value);
+        if ((await this.stat(directory, signal)).type !== 'directory') {
+          // Built inline: `OmniFsError.alreadyExists` drops `providerId`, and
+          // everything this package raises names the provider it came from.
+          throw new OmniFsError({
+            code: 'AlreadyExists',
+            message: `Already exists: ${directory.value}`,
+            path: directory.value,
+            providerId: 'sftp',
+            cause: error,
+          });
+        }
+      }
+    }
+  }
+
+  /**
+   * Runs a write, and on a missing parent builds the chain and runs it once more.
+   *
+   * One retry, not a loop: the second failure is the server telling us something
+   * other than the parent was wrong, and retrying past that would turn a real
+   * error into a hang.
+   */
+  async #withParents<T>(
+    path: RemotePath,
+    flags: SftpWriteFlags,
+    options: WriteOptions | undefined,
+    body: (remote: string) => Promise<T>,
+  ): Promise<T> {
+    const remote = this.#remote(path);
+
+    try {
+      return await body(remote);
+    } catch (error) {
+      const failure = this.#writeError(error, path, flags);
+      if (failure.code !== 'NotFound' || options?.createParents === false) throw failure;
+
+      await this.createDirectory(path.parent, options?.signal);
+      try {
+        return await body(remote);
+      } catch (retry) {
+        throw this.#writeError(retry, path, flags);
+      }
+    }
+  }
+
+  /**
+   * Names a failed write. An exclusive open answers status 4 when the path is
+   * already taken, and only this call site knows the open was exclusive — the
+   * same narrowing `provider-webdav` does for 405 on `MKCOL`.
+   */
+  #writeError(error: unknown, path: RemotePath, flags: SftpWriteFlags): OmniFsError {
+    if (flags !== 'wx' || !isFailure(error)) return toOmniFsError(error, path.value);
+
+    // Built inline: `OmniFsError.alreadyExists` drops `providerId`.
+    return new OmniFsError({
+      code: 'AlreadyExists',
+      message: `Already exists: ${path.value}`,
+      path: path.value,
+      providerId: 'sftp',
+      cause: error,
+    });
+  }
+
+  // Deleting is not implemented yet. `RemoteFileSystem` requires it, so it is
+  // declared and says plainly that it does nothing rather than failing in some
+  // protocol-flavoured way. `capabilities` above already promises the
+  // operation, so an `Unsupported` from here is a gap in this class, not a
+  // claim about the protocol.
   async delete(_path: RemotePath, _options?: DeleteOptions): Promise<void> {
     throw OmniFsError.unsupported('deleting', 'sftp');
   }
@@ -286,6 +406,10 @@ function isConnectionFailure(error: OmniFsError): boolean {
   return (
     error.code === 'ConnectionFailed' || error.code === 'Cancelled' || error.code === 'Timeout'
   );
+}
+
+function writeFlags(options: WriteOptions | undefined): SftpWriteFlags {
+  return options?.overwrite === false ? 'wx' : 'w';
 }
 
 export const SFTP_CAPABILITIES: ProviderCapabilities = {

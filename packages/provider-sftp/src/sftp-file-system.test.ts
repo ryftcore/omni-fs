@@ -428,3 +428,191 @@ describe('SftpFileSystem reads', () => {
     );
   });
 });
+
+describe('SftpFileSystem writes', () => {
+  function failure(): Error & { code: number } {
+    return Object.assign(new Error('Failure'), { code: 4 });
+  }
+
+  it('writes a file, truncating by default', async () => {
+    const writes: { path: string; flags: string; body: string }[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        writeAll: async (path: string, data: Uint8Array, flags: string) => {
+          writes.push({ path, flags, body: new TextDecoder().decode(data) });
+        },
+      }),
+    );
+
+    await fs.writeFile(RemotePath.parse('/a.txt'), new TextEncoder().encode('hello'));
+    expect(writes).toEqual([{ path: '/home/omnifs/a.txt', flags: 'w', body: 'hello' }]);
+  });
+
+  it('opens exclusively when overwrite is false, so the server does the excluding', async () => {
+    const flags: string[] = [];
+    const { fs } = await connected(
+      fakeSession({
+        writeAll: async (_p: string, _d: Uint8Array, mode: string) => void flags.push(mode),
+      }),
+    );
+
+    await fs.writeFile(RemotePath.parse('/a.txt'), new Uint8Array(), { overwrite: false });
+    expect(flags).toEqual(['wx']);
+  });
+
+  it('reports an exclusive write that lost the race as AlreadyExists', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        writeAll: async () => {
+          throw failure();
+        },
+      }),
+    );
+
+    await expect(
+      fs.writeFile(RemotePath.parse('/a.txt'), new Uint8Array(), { overwrite: false }),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  it('creates the missing parent chain and writes again', async () => {
+    const made: string[] = [];
+    let attempts = 0;
+    const { fs } = await connected(
+      fakeSession({
+        mkdir: async (path: string) => void made.push(path),
+        writeAll: async () => {
+          attempts += 1;
+          if (attempts === 1) throw notFound();
+        },
+      }),
+    );
+
+    await fs.writeFile(RemotePath.parse('/deep/nested/a.txt'), new TextEncoder().encode('x'));
+    expect(made).toEqual(['/home/omnifs/deep', '/home/omnifs/deep/nested']);
+    expect(attempts).toBe(2);
+  });
+
+  it('retries once and no more when building the parents did not help', async () => {
+    // The second failure is the server saying something other than the parent
+    // was wrong; retrying past it would turn a real error into a hang.
+    let attempts = 0;
+    const { fs } = await connected(
+      fakeSession({
+        mkdir: async () => undefined,
+        writeAll: async () => {
+          attempts += 1;
+          throw notFound();
+        },
+      }),
+    );
+
+    await expect(fs.writeFile(RemotePath.parse('/deep/a.txt'), new Uint8Array())).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+    );
+    expect(attempts).toBe(2);
+  });
+
+  it('does not build parents when the caller said not to', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        writeAll: async () => {
+          throw notFound();
+        },
+      }),
+    );
+
+    await expect(
+      fs.writeFile(RemotePath.parse('/deep/a.txt'), new Uint8Array(), { createParents: false }),
+    ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'NotFound');
+  });
+
+  it('reports progress for a whole-buffer write', async () => {
+    const seen: number[] = [];
+    const { fs } = await connected(fakeSession({ writeAll: async () => undefined }));
+
+    await fs.writeFile(RemotePath.parse('/a.txt'), new TextEncoder().encode('12345'), {
+      onProgress: (transferred) => seen.push(transferred),
+    });
+    expect(seen).toEqual([5]);
+  });
+
+  it('hands back a write stream opened with the right flags', async () => {
+    const flags: string[] = [];
+    const sink = new WritableStream<Uint8Array>();
+    const { fs } = await connected(
+      fakeSession({
+        openWriteStream: async (_path: string, mode: string) => {
+          flags.push(mode);
+          return sink;
+        },
+      }),
+    );
+
+    expect(await fs.createWriteStream(RemotePath.parse('/a.txt'))).toBe(sink);
+    await fs.createWriteStream(RemotePath.parse('/b.txt'), { overwrite: false });
+    expect(flags).toEqual(['w', 'wx']);
+  });
+
+  it('builds the parents of a streamed write before the first byte', async () => {
+    const made: string[] = [];
+    let attempts = 0;
+    const { fs } = await connected(
+      fakeSession({
+        mkdir: async (path: string) => void made.push(path),
+        openWriteStream: async () => {
+          attempts += 1;
+          if (attempts === 1) throw notFound();
+          return new WritableStream<Uint8Array>();
+        },
+      }),
+    );
+
+    await fs.createWriteStream(RemotePath.parse('/deep/a.txt'));
+    expect(made).toEqual(['/home/omnifs/deep']);
+    expect(attempts).toBe(2);
+  });
+});
+
+describe('SftpFileSystem createDirectory', () => {
+  function failure(): Error & { code: number } {
+    return Object.assign(new Error('Failure'), { code: 4 });
+  }
+
+  it('creates the whole chain, shallowest first', async () => {
+    const made: string[] = [];
+    const { fs } = await connected(fakeSession({ mkdir: async (p: string) => void made.push(p) }));
+
+    await fs.createDirectory(RemotePath.parse('/a/b/c'));
+    expect(made).toEqual(['/home/omnifs/a', '/home/omnifs/a/b', '/home/omnifs/a/b/c']);
+  });
+
+  it('treats an existing directory as nothing to do', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        mkdir: async () => {
+          throw failure();
+        },
+        stat: async () => directory(),
+      }),
+    );
+
+    await expect(fs.createDirectory(RemotePath.parse('/existing'))).resolves.toBeUndefined();
+  });
+
+  it('refuses when a file already occupies the path', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        mkdir: async () => {
+          throw failure();
+        },
+        stat: async () => file(),
+      }),
+    );
+
+    await expect(fs.createDirectory(RemotePath.parse('/a.txt'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+});
