@@ -6,10 +6,11 @@
 # Everything here is throwaway: the credentials below are committed on purpose
 # and must never be used anywhere real. Nothing binds to a public interface.
 #
-# Only S3 is implemented today, so MinIO is the one server you can browse.
-# FTP, SFTP and WebDAV are skeletons that throw `Unsupported` from connect() —
-# their servers are here to exercise the connection form now, and to be the
-# targets the conformance suite runs against once those providers are written.
+# S3, WebDAV and SFTP are implemented, and `pnpm test:conformance` runs the
+# shared suite against all three of these servers. FTP is still a skeleton that
+# throws `Unsupported` from connect(); its server is here to exercise the
+# connection form now, and to be the target the suite runs against once that
+# provider is written.
 
 name: omni-fs-dev
 

@@ -25,8 +25,7 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
-Only `@omni-fs/core`, `@omni-fs/testing` and `@omni-fs/ui` have tests today; the
-provider packages run `vitest --passWithNoTests`. `pnpm test` in
+`provider-ftp` is the only package without tests. `pnpm test` in
 `packages/testing` is the conformance suite, and is where most behaviour is
 actually verified. `packages/ui` runs its tests without jsdom — its state
 machine is a pure reducer, so there is no DOM to simulate.
@@ -169,10 +168,13 @@ protocol meets it, which is why a provider is finished exactly when it passes.
 
 ## Current state
 
-S3 and WebDAV are implemented; FTP and SFTP are deliberate skeletons:
-capabilities and schemas declared, methods throwing `Unsupported`. WebDAV
-declares `canWatch: false` because the protocol has no change notification at
-all, so core polls it. Download/upload commands are stubs — the queue, retry
-and progress already exist in core; only the local-file half is missing.
-`pnpm test:conformance` runs the shared suite against the live servers in
-`compose.yaml`; `packages/provider-webdav` implements it today.
+S3, WebDAV and SFTP are implemented; FTP is a deliberate skeleton:
+capabilities and schemas declared, methods throwing `Unsupported`. Every
+provider declares `canWatch: false` — no protocol here has change notification
+worth the name — and core does **not** poll to make up for it: both
+`ManagedFileSystem.watch` and the extension's `watch` are deliberate no-ops, on
+the grounds that background listings against a metered bucket are a cost the
+user did not ask for. Refresh is explicit. Download/upload commands are stubs —
+the queue, retry and progress already exist in core; only the local-file half
+is missing. `pnpm test:conformance` runs the shared suite against the live
+servers in `compose.yaml`; S3, WebDAV and SFTP all implement it.
