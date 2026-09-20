@@ -2193,6 +2193,27 @@ git commit -m ":sparkles: feat make a closed sftp write stream mean the bytes ar
 
 ### Task 7: The file system — capabilities, connect, stat and list
 
+> **Corrected during execution — read this before Task 7, 8, 9 or 10.**
+>
+> 1. **This task as written does not compile.** `readFile`, `createReadStream`, `writeFile` and
+>    `delete` are non-optional on `RemoteFileSystem`, and this plan only adds them in Tasks 8–10, so
+>    Tasks 7, 8 and 9 would each commit a tree whose `pnpm build` fails with `TS2420: Class
+'SftpFileSystem' incorrectly implements interface 'RemoteFileSystem'`. Dropping `implements`
+>    does not help — `ProviderDefinition.create` returns a `RemoteFileSystem`, so `index.ts` fails
+>    structurally instead. Task 7 therefore adds the four methods as
+>    `throw OmniFsError.unsupported(…, 'sftp')` placeholders, the shape the skeleton already used,
+>    and **Tasks 8, 9 and 10 replace those placeholders rather than adding beside them** — pasting a
+>    second `readFile` gives `TS2393: Duplicate function implementation`.
+> 2. **The extension bundle needs one build change.** `index.ts` importing the real class pulls
+>    `ssh2` into `apps/vscode`'s bundle for the first time, and esbuild fails on `cpu-features` —
+>    the optional native module `pnpm-workspace.yaml` deliberately refuses to build, which `ssh2`
+>    requires inside a `try`/`catch`. `apps/vscode/esbuild.mjs` marks it external alongside
+>    `vscode`, so the bundled `require` throws at runtime exactly where `ssh2` already expects it to
+>    and falls back to its pure-JS crypto. Commit that first, so every commit in the task builds.
+> 3. `connect()` must close a session it is replacing. Replacing a dead one without closing leaks
+>    whatever the connection still holds — the same defect class the session task was fixed for
+>    twice.
+
 **Files:**
 
 - Create: `packages/provider-sftp/src/sftp-helpers.ts`
@@ -3117,7 +3138,7 @@ Expected: FAIL — `fs.readFile is not a function`.
 
 - [ ] **Step 6: Implement the reads**
 
-Add to `SftpFileSystem`, after `list`, and extend the imports with `collectStream`, `streamFrom` from `@omni-fs/core`, the types `ReadOptions`, and `buildRange`, `translateReadStream` from `./sftp-helpers.js`:
+**Replace** the `readFile` and `createReadStream` placeholders Task 7 left in `SftpFileSystem` (do not add a second copy of either), and extend the imports with `collectStream`, `streamFrom` from `@omni-fs/core`, the types `ReadOptions`, and `buildRange`, `translateReadStream` from `./sftp-helpers.js`:
 
 ```ts
   /**
@@ -3374,7 +3395,7 @@ Expected: FAIL — `fs.writeFile is not a function`.
 
 - [ ] **Step 3: Implement the writes**
 
-Add to `SftpFileSystem`, after `createReadStream`, extending the imports with `isFailure` from `./errors.js`, the types `WriteOptions` from `@omni-fs/core`, and `SftpWriteFlags` from `./sftp-session.js`:
+**Replace** the `writeFile` placeholder Task 7 left in `SftpFileSystem` (do not add a second copy) and add the rest after it, extending the imports with `isFailure` from `./errors.js`, the types `WriteOptions` from `@omni-fs/core`, and `SftpWriteFlags` from `./sftp-session.js`:
 
 ```ts
   /**
@@ -3764,7 +3785,7 @@ Expected: FAIL — `fs.delete is not a function`.
 
 - [ ] **Step 3: Implement the three mutations**
 
-Add to `SftpFileSystem`, after `createDirectory`, extending the type imports with `DeleteOptions` and `OverwriteOptions` from `@omni-fs/core`:
+**Replace** the `delete` placeholder Task 7 left in `SftpFileSystem` (do not add a second copy) and add the rest after it, extending the type imports with `DeleteOptions` and `OverwriteOptions` from `@omni-fs/core`:
 
 ```ts
   /**
