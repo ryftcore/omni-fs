@@ -449,4 +449,25 @@ describe('ManagedFileSystem.createWriteStream', () => {
 
     expect((await fs.stat(p('/a/one.txt'))).size).toBe(19);
   });
+
+  it('invalidates the cached stat when the write fails part way', async () => {
+    const { inner, cache, fs } = harness();
+    inner.seed({ '/a/one.txt': 'short' });
+    vi.spyOn(inner, 'createWriteStream').mockResolvedValue(
+      new WritableStream<Uint8Array>({
+        write: () => {
+          throw new Error('socket closed');
+        },
+      }),
+    );
+    expect((await fs.stat(p('/a/one.txt'))).size).toBe(5);
+
+    const stream = await fs.createWriteStream(p('/a/one.txt'));
+    const writer = stream.getWriter();
+    await expect(writer.write(bytes('partial'))).rejects.toThrow('socket closed');
+
+    // Bytes may have landed before it failed, so the old size is not safe to
+    // keep serving. An errored stream never reaches the sink's `abort`.
+    expect(cache.getStat(CONNECTION, p('/a/one.txt'))).toBeUndefined();
+  });
 });
