@@ -494,8 +494,9 @@ export const WEBDAV_CAPABILITIES: ProviderCapabilities = {
   // false is simply what is true of it. The shared suite now gates its two
   // `ifMatch` cases on this flag, so declaring it false is what skips them —
   // honestly, since without a token from `stat()` there is nothing to hold.
-  // Real Nextcloud and sabredav do return `getetag`; a provider that detects
-  // one should flip this and inherit both cases. See task-4-report.md.
+  // Real Nextcloud and sabredav do return `getetag` in PROPFIND, so a provider
+  // that detects one should flip this and inherit both cases — which is the
+  // argument for reading it per connection rather than hard-coding it here.
   hasVersionTokens: false,
   maxConcurrency: 6,
   listIsPaginated: false,
