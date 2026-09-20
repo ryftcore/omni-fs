@@ -3054,7 +3054,7 @@ export function translateReadStream(
 Run: `pnpm --filter @omni-fs/provider-sftp exec vitest run src/sftp-helpers.test.ts`
 Expected: PASS, 18 tests.
 
-Append to `packages/provider-sftp/src/sftp-file-system.test.ts` — and add `collectStream, streamFrom` to the `@omni-fs/core` import and `Readable` to a `node:stream` import:
+Append to `packages/provider-sftp/src/sftp-file-system.test.ts` — and add `Readable` to a `node:stream` import. (`collectStream` and `streamFrom` belong in the _source_ file's imports, not the test's: the cases below never call them, and the repo lints unused imports as an error.)
 
 ```ts
 describe('SftpFileSystem reads', () => {
