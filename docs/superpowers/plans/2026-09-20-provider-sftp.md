@@ -77,7 +77,7 @@ In `packages/provider-sftp/package.json`, replace the `test` script and the depe
     "dev": "tsc -b --watch",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
     "lint": "eslint src",
-    "test": "vitest run",
+    "test": "vitest run --passWithNoTests",
     "test:conformance": "vitest run --config vitest.conformance.config.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },
@@ -376,11 +376,21 @@ Expected: PASS, 11 tests.
 Run: `pnpm test && pnpm lint`
 Expected: PASS. `apps/vscode` imports `sftpProvider` only, so moving the schemas changes nothing for it.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 9: Drop the no-tests escape hatch and commit**
+
+Now that the package has tests, `--passWithNoTests` has nothing left to excuse. In
+`packages/provider-sftp/package.json`:
+
+```json
+    "test": "vitest run",
+```
+
+It was there for one commit so that step 3's commit did not leave a package whose own `pnpm test`
+fails with "No test files found".
 
 ```bash
 pnpm exec prettier --write packages/provider-sftp/src
-git add packages/provider-sftp/src
+git add packages/provider-sftp/src packages/provider-sftp/package.json
 git commit -m ":sparkles: feat add sftp settings parsing with a root prefix that keeps its leading slash"
 ```
 
@@ -607,7 +617,7 @@ function systemCode(cause: unknown): string | undefined {
 - [ ] **Step 4: Run the test**
 
 Run: `pnpm --filter @omni-fs/provider-sftp exec vitest run src/errors.test.ts`
-Expected: PASS, 19 tests.
+Expected: PASS, 20 tests.
 
 - [ ] **Step 5: Commit**
 
@@ -983,7 +993,7 @@ function keyType(key: Buffer): string {
 - [ ] **Step 7: Run both test files**
 
 Run: `pnpm --filter @omni-fs/provider-sftp exec vitest run src/known-hosts.test.ts src/local-files.test.ts`
-Expected: PASS, 19 tests.
+Expected: PASS, 18 tests (12 known-hosts, 6 local-files).
 
 - [ ] **Step 8: Commit**
 
@@ -2286,7 +2296,7 @@ function normalise(value: string): string {
 - [ ] **Step 4: Run it, then write the failing file system test**
 
 Run: `pnpm build && pnpm --filter @omni-fs/provider-sftp exec vitest run src/sftp-helpers.test.ts`
-Expected: PASS, 13 tests.
+Expected: PASS, 14 tests.
 
 Create `packages/provider-sftp/src/sftp-file-system.test.ts`:
 
@@ -2949,7 +2959,7 @@ export function translateReadStream(
 - [ ] **Step 4: Run the helper tests, then write the failing read tests**
 
 Run: `pnpm --filter @omni-fs/provider-sftp exec vitest run src/sftp-helpers.test.ts`
-Expected: PASS, 17 tests.
+Expected: PASS, 18 tests.
 
 Append to `packages/provider-sftp/src/sftp-file-system.test.ts` — and add `collectStream, streamFrom` to the `@omni-fs/core` import and `Readable` to a `node:stream` import:
 
