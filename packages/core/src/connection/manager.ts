@@ -204,6 +204,21 @@ export class ConnectionManager implements AsyncDisposable {
       throw wrapped;
     }
 
+    // `acquire` falls through to here when the live entry is no longer alive.
+    // Dropping the reference is not enough — the old instance still owns a
+    // socket, and nothing else will ever close it.
+    const replaced = this.#live.get(id);
+    if (replaced !== undefined && replaced !== fs) {
+      try {
+        await replaced[Symbol.asyncDispose]();
+      } catch (error) {
+        this.#options.logger.log('warn', 'Error while closing a replaced connection', {
+          connectionId: id,
+          error: String(error),
+        });
+      }
+    }
+
     this.#live.set(id, fs);
     this.#setState(id, { status: 'connected', since: Date.now() });
     this.#touch(id);
