@@ -153,7 +153,12 @@ export class VsCodeConfigStore implements ConfigStore {
   async #write(configs: readonly ConnectionConfig[]): Promise<void> {
     await vscode.workspace
       .getConfiguration(this.#section)
-      .update('connections', configs, this.#target);
+      // `undefined` removes the key; an empty array would leave
+      // `"omniFs.connections": []` behind. This setting is meant to be
+      // committed and shared with a team, so removing the last connection has
+      // to leave the file as it was found rather than adding a line to
+      // someone's `.vscode/settings.json`.
+      .update('connections', configs.length === 0 ? undefined : configs, this.#target);
   }
 }
 

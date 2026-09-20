@@ -2,7 +2,7 @@ import * as assert from 'node:assert/strict';
 import * as vscode from 'vscode';
 import type { ConnectionConfig, LogLevel } from '@omni-fs/core';
 import { VsCodeConfigStore, VsCodeLogger, VsCodeSecretStore } from '../../host/vscode-ports.js';
-import { removeConnection, resetConnections } from '../helpers.js';
+import { resetConnections } from '../helpers.js';
 
 /**
  * The host adapter layer — the whole of it. When the desktop app is built it
@@ -167,12 +167,18 @@ suite('VsCodeConfigStore, against the real configuration API', () => {
       [`${PREFIX}-last`],
     );
 
-    await removeConnection(`${PREFIX}-last`);
+    // Through the store, not through the test helper. The helper collapses an
+    // empty array to `undefined` itself, so driving the removal with it would
+    // satisfy the assertion below whatever `VsCodeConfigStore` did — the exact
+    // regression this case exists to catch.
+    await store.delete(`${PREFIX}-last`);
 
     const listed = (await store.list()).filter((entry) => entry.id.startsWith(PREFIX));
     assert.deepEqual(listed, []);
     // "Leaves nothing behind" means the key itself, not an empty array
-    // stored under it — the two are indistinguishable through `list()`.
+    // stored under it — the two are indistinguishable through `list()`, and
+    // `omniFs.connections` is a setting teams commit, so a stray `[]` is noise
+    // in someone's `.vscode/settings.json`.
     assert.equal(
       vscode.workspace.getConfiguration('omniFs').inspect('connections')?.globalValue,
       undefined,
