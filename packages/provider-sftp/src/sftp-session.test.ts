@@ -38,8 +38,12 @@ describe('SftpSession requests', () => {
     const controller = new AbortController();
     controller.abort();
 
+    // `providerId` is asserted here because the `OmniFsError.cancelled` factory
+    // drops it, which would leave this provider emitting two shapes of
+    // `Cancelled` that a caller filtering by provider cannot both attribute.
     await expect(fs.stat('/data/a.txt', controller.signal)).rejects.toSatisfy(
-      (error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled',
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'Cancelled' && error.providerId === 'sftp',
     );
     expect(stat).not.toHaveBeenCalled();
   });

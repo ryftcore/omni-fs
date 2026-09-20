@@ -83,10 +83,16 @@ export class SftpSession implements SftpRequests {
   static async open(options: SftpSessionOptions): Promise<SftpSession> {
     const { settings, secret, logger, signal } = options;
 
+    // Hoisted so the catch can reach it. Inside the try it is narrowed through
+    // `connection`, a `const` the closures below can see through — a `let` this
+    // one captures would lose its narrowing in every callback.
+    let client: Client | undefined;
+
     try {
       const knownHosts = await readKnownHosts(settings.knownHostsPath);
       const auth = await buildAuth(settings, secret);
-      const client = new Client();
+      const connection = new Client();
+      client = connection;
       // Initialised explicitly so `prefer-const` sees the assignment below as a
       // reassignment. `const` at that assignment is not an option: the
       // listeners registered here close over `session` before it exists, and a
@@ -102,10 +108,10 @@ export class SftpSession implements SftpRequests {
       // temporary listener inside the promise below is what rejects the connect;
       // this one exists so there is no instant where nothing is listening, and
       // it is also how `isAlive` learns to stop claiming the session is usable.
-      client.on('error', (error: Error) => {
+      connection.on('error', (error: Error) => {
         if (session !== undefined) session.#markDead(error);
       });
-      client.on('close', () => {
+      connection.on('close', () => {
         if (session !== undefined) session.#markDead();
       });
 
@@ -137,8 +143,8 @@ export class SftpSession implements SftpRequests {
 
       await new Promise<void>((resolve, reject) => {
         const settle = (error?: unknown): void => {
-          client.removeListener('ready', onReady);
-          client.removeListener('error', onError);
+          connection.removeListener('ready', onReady);
+          connection.removeListener('error', onError);
           signal?.removeEventListener('abort', onAbort);
           if (error === undefined) resolve();
           else reject(error);
@@ -146,21 +152,28 @@ export class SftpSession implements SftpRequests {
         const onReady = (): void => settle();
         const onError = (error: Error): void => settle(refusal ?? error);
         const onAbort = (): void => {
-          client.end();
-          settle(OmniFsError.cancelled(`SFTP connect to ${settings.host}`));
+          connection.end();
+          settle(cancelled(`SFTP connect to ${settings.host}`));
         };
 
-        client.once('ready', onReady);
-        client.once('error', onError);
+        connection.once('ready', onReady);
+        connection.once('error', onError);
         signal?.addEventListener('abort', onAbort, { once: true });
-        client.connect(config);
+        connection.connect(config);
       });
 
       const sftp = await new Promise<SFTPWrapper>((resolve, reject) => {
-        client.sftp((error, channel) => (error ? reject(error) : resolve(channel)));
+        connection.sftp((error, channel) => (error ? reject(error) : resolve(channel)));
       });
 
-      session = new SftpSession(sftp, detectExtensions(sftp), logger, client);
+      // The abort listener only covered the connect race. Without this check an
+      // abort during the channel open hands a live session to a caller that has
+      // already cancelled, and the connection leaks the moment they discard it.
+      if (signal?.aborted === true) {
+        throw cancelled(`SFTP connect to ${settings.host}`);
+      }
+
+      session = new SftpSession(sftp, detectExtensions(sftp), logger, connection);
 
       logger.log('info', 'SFTP session opened', {
         host: settings.host,
@@ -170,6 +183,14 @@ export class SftpSession implements SftpRequests {
 
       return session;
     } catch (error) {
+      // Nothing above returned, so no caller holds this connection — end it, or
+      // an authenticated socket survives with nothing able to close it. A server
+      // that refuses the sftp subsystem is the case that leaves it alive.
+      try {
+        client?.end();
+      } catch {
+        // The connection is already gone; there is nothing left to close.
+      }
       throw toOmniFsError(error, settings.host);
     }
   }
@@ -250,14 +271,14 @@ export class SftpSession implements SftpRequests {
     signal: AbortSignal | undefined,
     body: (callback: (error: unknown, value?: T) => void) => void,
   ): Promise<T> {
-    if (signal?.aborted === true) throw OmniFsError.cancelled('SFTP request');
+    if (signal?.aborted === true) throw cancelled('SFTP request');
 
     return new Promise<T>((resolve, reject) => {
       let settled = false;
       const onAbort = (): void => {
         if (settled) return;
         settled = true;
-        reject(OmniFsError.cancelled('SFTP request'));
+        reject(cancelled('SFTP request'));
       };
       signal?.addEventListener('abort', onAbort, { once: true });
 
@@ -291,6 +312,19 @@ export function detectExtensions(sftp: SFTPWrapper): SftpExtensions {
     fsync: has('fsync@openssh.com'),
     copyData: has('copy-data'),
   };
+}
+
+/**
+ * `Cancelled`, built inline for the same reason `errors.ts` does: the
+ * `OmniFsError.cancelled` factory carries no `providerId`, so a caller
+ * filtering by provider cannot attribute what it dropped.
+ */
+function cancelled(operation: string): OmniFsError {
+  return new OmniFsError({
+    code: 'Cancelled',
+    message: `Cancelled: ${operation}`,
+    providerId: 'sftp',
+  });
 }
 
 function toAttrs(stats: Stats): SftpAttrs {
