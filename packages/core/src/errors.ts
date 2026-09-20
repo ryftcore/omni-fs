@@ -90,8 +90,22 @@ export class OmniFsError extends Error {
     Object.defineProperty(this, OMNI_FS_ERROR, { value: true });
   }
 
+  /**
+   * The brand plus the one field every consumer reads. Callers above the
+   * provider line branch on `code` and nothing else — `toVsCodeError`'s
+   * default arm renders `${code}: ${message}` straight into the editor — so a
+   * branded value without one would be accepted and then shown as
+   * "undefined: undefined". Only this constructor brands anything in-repo, but
+   * the registry is published on the host's API, so a third-party provider can
+   * brand whatever it likes.
+   */
   static is(value: unknown): value is OmniFsError {
-    return typeof value === 'object' && value !== null && OMNI_FS_ERROR in value;
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      OMNI_FS_ERROR in value &&
+      typeof (value as { code?: unknown }).code === 'string'
+    );
   }
 
   static notFound(path: string, cause?: unknown): OmniFsError {

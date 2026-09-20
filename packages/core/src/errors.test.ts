@@ -182,12 +182,31 @@ describe('OmniFsError.is across module copies', () => {
 
   it('recognises a structurally identical error carrying the brand', () => {
     // The contract stated without relying on module-registry mechanics: the
-    // brand is the whole test. Anything carrying it is one of ours.
-    const branded = Object.defineProperty(new Error('gone'), Symbol.for('omni-fs.error'), {
-      value: true,
-    });
+    // brand plus a string `code` is the whole test. Anything carrying both is
+    // one of ours, whichever copy of this module built it.
+    const branded = Object.defineProperty(
+      Object.assign(new Error('gone'), { code: 'NotFound' }),
+      Symbol.for('omni-fs.error'),
+      { value: true },
+    );
 
     expect(OmniFsError.is(branded)).toBe(true);
+  });
+
+  it('refuses a branded value that has no code', () => {
+    // The brand alone is not enough. Everything above the provider line reads
+    // `.code` off whatever `is` accepts — `toVsCodeError` switches on it and
+    // its default arm renders `${code}: ${message}`, so a shapeless branded
+    // value puts "undefined: undefined" in front of the user. Nothing in this
+    // repo brands anything but the constructor, but the registry is published
+    // on `OmniFsApi`, so a third-party provider can.
+    const branded = Object.defineProperty(
+      { message: 'no code here' },
+      Symbol.for('omni-fs.error'),
+      { value: true },
+    );
+
+    expect(OmniFsError.is(branded)).toBe(false);
   });
 
   it('still refuses anything without the brand', () => {
