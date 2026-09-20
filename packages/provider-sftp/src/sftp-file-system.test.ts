@@ -1,3 +1,4 @@
+import { Readable } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 import { NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
 import type { ConnectionConfig, DirEntry, ProviderContext } from '@omni-fs/core';
@@ -351,6 +352,79 @@ describe('SftpFileSystem list', () => {
 
     await expect(collect(fs.list(RemotePath.parse('/releases')))).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled',
+    );
+  });
+});
+
+describe('SftpFileSystem reads', () => {
+  function readable(body: string): ReadableStream<Uint8Array> {
+    return Readable.toWeb(Readable.from([Buffer.from(body)])) as ReadableStream<Uint8Array>;
+  }
+
+  it('reads a whole file', async () => {
+    const { fs } = await connected(fakeSession({ openReadStream: async () => readable('hello') }));
+    expect(new TextDecoder().decode(await fs.readFile(RemotePath.parse('/a.txt')))).toBe('hello');
+  });
+
+  it('asks for an inclusive byte range', async () => {
+    let range: unknown;
+    const { fs } = await connected(
+      fakeSession({
+        openReadStream: async (_path: string, options: unknown) => {
+          range = options;
+          return readable('234');
+        },
+      }),
+    );
+
+    await fs.readFile(RemotePath.parse('/ranged.txt'), { offset: 2, length: 3 });
+    expect(range).toMatchObject({ start: 2, end: 4 });
+  });
+
+  it('answers a zero-length read without opening a stream, after checking the file is there', async () => {
+    let opened = 0;
+    const { fs } = await connected(
+      fakeSession({
+        stat: async () => file(10),
+        openReadStream: async () => {
+          opened += 1;
+          return readable('');
+        },
+      }),
+    );
+
+    const bytes = await fs.readFile(RemotePath.parse('/a.txt'), { offset: 5, length: 0 });
+    expect(bytes.byteLength).toBe(0);
+    expect(opened).toBe(0);
+  });
+
+  it('still reports a missing file on a zero-length read', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        stat: async () => {
+          throw notFound();
+        },
+        lstat: async () => {
+          throw notFound();
+        },
+      }),
+    );
+
+    await expect(
+      fs.readFile(RemotePath.parse('/gone.txt'), { offset: 0, length: 0 }),
+    ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'NotFound');
+  });
+
+  it('translates a failure the stream reports after it was handed over', async () => {
+    const failing = new ReadableStream<Uint8Array>({
+      pull() {
+        throw Object.assign(new Error('No such file'), { code: 2 });
+      },
+    });
+    const { fs } = await connected(fakeSession({ openReadStream: async () => failing }));
+
+    await expect(fs.readFile(RemotePath.parse('/gone.txt'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
     );
   });
 });

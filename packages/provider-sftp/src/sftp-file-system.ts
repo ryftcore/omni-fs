@@ -1,4 +1,4 @@
-import { OmniFsError } from '@omni-fs/core';
+import { collectStream, OmniFsError, streamFrom } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -13,7 +13,14 @@ import type {
 } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import { readSettings, type SftpSettings } from './settings.js';
-import { joinRemote, resolveBase, toFileStat, toFileType } from './sftp-helpers.js';
+import {
+  buildRange,
+  joinRemote,
+  resolveBase,
+  toFileStat,
+  toFileType,
+  translateReadStream,
+} from './sftp-helpers.js';
 import { SftpSession, type OpenSession, type SftpConnection } from './sftp-session.js';
 
 /**
@@ -180,22 +187,54 @@ export class SftpFileSystem implements RemoteFileSystem {
     }
   }
 
-  // Reading, writing and deleting are not implemented yet. `RemoteFileSystem`
-  // requires all four, so they are declared and each says plainly that it does
-  // nothing rather than failing in some protocol-flavoured way. `capabilities`
-  // above already promises the three operations, so an `Unsupported` from here
-  // is a gap in this class, not a claim about the protocol.
-  async readFile(_path: RemotePath, _options?: ReadOptions): Promise<Uint8Array> {
-    throw OmniFsError.unsupported('reading a file', 'sftp');
+  /**
+   * `onProgress` is not reported, as in `provider-webdav`: the bytes arrive
+   * through a stream this method immediately collects, and a caller who wants
+   * progress can read the stream itself.
+   */
+  async readFile(path: RemotePath, options?: ReadOptions): Promise<Uint8Array> {
+    try {
+      return await collectStream(await this.createReadStream(path, options));
+    } catch (error) {
+      throw toOmniFsError(error, path.value);
+    }
   }
 
   async createReadStream(
-    _path: RemotePath,
-    _options?: ReadOptions,
+    path: RemotePath,
+    options?: ReadOptions,
   ): Promise<ReadableStream<Uint8Array>> {
-    throw OmniFsError.unsupported('reading a file', 'sftp');
+    const session = this.#requireSession();
+    const range = buildRange(options);
+
+    // A read of zero bytes has no range spelling, so it is answered here rather
+    // than sent as something the server would read as a different request. The
+    // `stat` is not a formality: without it a zero-length read of a missing path,
+    // or one through an already-aborted signal, would succeed emptily, where
+    // `MemoryFileSystem` — the contract's reference — raises `NotFound` and
+    // `Cancelled` first.
+    if (range === 'empty') {
+      await this.stat(path, options?.signal);
+      return streamFrom(new Uint8Array(0));
+    }
+
+    const stream = await this.#run(
+      () =>
+        session.openReadStream(this.#remote(path), {
+          ...(range ?? {}),
+          ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+        }),
+      path,
+    );
+
+    return translateReadStream(stream, path.value);
   }
 
+  // Writing and deleting are not implemented yet. `RemoteFileSystem` requires
+  // both, so they are declared and each says plainly that it does nothing
+  // rather than failing in some protocol-flavoured way. `capabilities` above
+  // already promises both operations, so an `Unsupported` from here is a gap
+  // in this class, not a claim about the protocol.
   async writeFile(_path: RemotePath, _data: Uint8Array, _options?: WriteOptions): Promise<void> {
     throw OmniFsError.unsupported('writing a file', 'sftp');
   }

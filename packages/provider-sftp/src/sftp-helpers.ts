@@ -1,4 +1,5 @@
-import type { FileStat, FileType, RemotePath } from '@omni-fs/core';
+import type { FileStat, FileType, ReadOptions, RemotePath } from '@omni-fs/core';
+import { toOmniFsError } from './errors.js';
 import type { SftpAttrs } from './sftp-session.js';
 
 const S_IFMT = 0o170000;
@@ -63,4 +64,50 @@ export function joinRemote(base: string, path: RemotePath): string {
 function normalise(value: string): string {
   const collapsed = `/${value}`.replace(/\/+/g, '/').replace(/\/+$/, '');
   return collapsed === '' ? '/' : collapsed;
+}
+
+/**
+ * `ReadOptions` to an `ssh2` byte range, whose `end` is inclusive.
+ *
+ * `'empty'` means the caller asked for no bytes at all: `{ offset: 5, length: 0 }`
+ * would otherwise become `start: 5, end: 4`, which reads as an inverted range.
+ * The same shape, and the same reason, as `provider-webdav`'s `buildRange`.
+ */
+export function buildRange(
+  options: ReadOptions | undefined,
+): { start: number; end?: number } | 'empty' | undefined {
+  if (options?.offset === undefined) return undefined;
+  const start = options.offset;
+  if (options.length === undefined) return { start };
+  return options.length <= 0 ? 'empty' : { start, end: start + options.length - 1 };
+}
+
+/**
+ * Gives a read stream's late failures the same translation the request-shaped
+ * calls get. `createReadStream` returns before the request is answered, so a
+ * missing file or a dropped connection arrives as an error on the stream rather
+ * than as a rejection from the call that made it.
+ */
+export function translateReadStream(
+  source: ReadableStream<Uint8Array>,
+  path: string,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        throw toOmniFsError(error, path);
+      }
+    },
+    cancel(reason) {
+      return reader.cancel(reason);
+    },
+  });
 }

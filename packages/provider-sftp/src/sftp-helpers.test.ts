@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RemotePath } from '@omni-fs/core';
-import { joinRemote, resolveBase, toFileStat, toFileType } from './sftp-helpers.js';
+import { buildRange, joinRemote, resolveBase, toFileStat, toFileType } from './sftp-helpers.js';
 
 describe('toFileType', () => {
   it.each([
@@ -68,5 +68,24 @@ describe('joinRemote', () => {
   it('does not double the slash when the base is the filesystem root', () => {
     expect(joinRemote('/', RemotePath.parse('/a.txt'))).toBe('/a.txt');
     expect(joinRemote('/', RemotePath.ROOT)).toBe('/');
+  });
+});
+
+describe('buildRange', () => {
+  it('is nothing when the caller asked for the whole file', () => {
+    expect(buildRange(undefined)).toBeUndefined();
+    expect(buildRange({})).toBeUndefined();
+  });
+
+  it('turns offset and length into an inclusive end', () => {
+    expect(buildRange({ offset: 2, length: 3 })).toEqual({ start: 2, end: 4 });
+  });
+
+  it('leaves the end open when only an offset is given', () => {
+    expect(buildRange({ offset: 10 })).toEqual({ start: 10 });
+  });
+
+  it('reports a zero-length read as empty rather than as an inverted range', () => {
+    expect(buildRange({ offset: 5, length: 0 })).toBe('empty');
   });
 });
