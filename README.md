@@ -12,9 +12,9 @@ Browse, edit and transfer remote files without leaving your editor.
 
 ---
 
-> **Status: beta.** The architecture, core, S3 provider and WebDAV provider are
-> in place; FTP and SFTP are scaffolded but not yet implemented. The published
-> release, `v0.1.0-beta.1`, predates WebDAV and ships S3 alone — see
+> **Status: beta.** The architecture, core, S3 provider, WebDAV provider and
+> SFTP provider are in place; FTP is scaffolded but not yet implemented. The
+> published release, `v0.1.0-beta.1`, predates WebDAV and ships S3 alone — see
 > [Roadmap](#roadmap) and the
 > [extension changelog](apps/vscode/CHANGELOG.md).
 
@@ -46,7 +46,7 @@ the software does, and it behaves correctly because of it.
 | ---------------------- | -------------- | --------------------------------------------------------------------- |
 | **S3 / S3-compatible** | ✅ Implemented | AWS S3, MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Ceph |
 | **FTP / FTPS**         | 🚧 Scaffolded  | Explicit and implicit TLS                                             |
-| **SFTP (SSH)**         | 🚧 Scaffolded  | Password, private key, SSH agent                                      |
+| **SFTP (SSH)**         | ✅ Implemented | Password, private key, SSH agent                                      |
 | **WebDAV**             | ✅ Implemented | Nextcloud, ownCloud                                                   |
 
 ## Quick start
@@ -110,7 +110,7 @@ so that mixing them up is a compile error.
 - [x] S3 / S3-compatible provider
 - [x] VS Code `FileSystemProvider`, connections tree, transfers view
 - [ ] FTP / FTPS provider
-- [ ] SFTP provider
+- [x] SFTP provider
 - [x] WebDAV provider
 - [ ] Download / upload wired to the local filesystem
 - [ ] Conformance suite running against containers in CI

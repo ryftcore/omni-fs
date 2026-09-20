@@ -22,14 +22,13 @@ docs/nested/deep/deep.txt
 
 ## What you can actually test today
 
-`provider-s3` and `provider-webdav` are implemented. FTP and SFTP throw
-`Unsupported` from `connect()`, so **Test Connection will fail for those two**
+`provider-s3`, `provider-webdav` and `provider-sftp` are implemented. FTP still
+throws `Unsupported` from `connect()`, so **Test Connection will fail for it**
 with "… is not implemented yet". That is the correct result, and it is still
 worth running: it exercises the probe path, the error mapping and the form's
-error display. Browsing files works on S3 and WebDAV.
+error display. Browsing files works on S3, WebDAV and SFTP.
 
-The remaining two servers are here so those providers can be written against
-something real.
+The FTP server is here so that provider can be written against something real.
 
 ## Conformance suite
 
@@ -41,9 +40,9 @@ docker compose up -d
 pnpm test:conformance
 ```
 
-Providers that are still skeletons contribute no cases — only
-`packages/provider-webdav` defines the script today, so WebDAV is the whole of
-what runs. A provider is finished exactly when this passes for it.
+`packages/provider-webdav` and `packages/provider-sftp` define the script today,
+so WebDAV and SFTP are what runs. A provider is finished exactly when this
+passes for it.
 
 Every case makes its own `/conformance-<timestamp>-<n>` directory and removes
 it again, so the seeded tree above is what a `PROPFIND` should show both before
@@ -87,10 +86,20 @@ Passive data ports 21000-21010 are published; without them listings hang.
 | Username       | `omnifs`            |
 | Authentication | Password            |
 | Password       | `omnifs-dev-secret` |
+| Root prefix    | `/data`             |
 
-Files live under `/data`. Built from `docker/sftp/Dockerfile` rather than
-pulled: the common SFTP images are amd64-only, so they emulate on Apple
-Silicon.
+Files live under `/data`, so the root prefix is absolute — the one provider where
+that form is the common one. Leave it empty and the connection starts in the
+account's home directory instead, which is empty on this image.
+
+Host keys: the provider reads `~/.ssh/known_hosts` and refuses a host listed
+there with a different key. `localhost:2222` is normally absent, so the first
+connection is accepted and its fingerprint logged. If you have an old entry for
+that port from another project, delete it or point `known_hosts file` at
+somewhere else.
+
+Built from `docker/sftp/Dockerfile` rather than pulled: the common SFTP images
+are amd64-only, so they emulate on Apple Silicon.
 
 ## WebDAV
 
