@@ -100,14 +100,35 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
   ): Promise<void> {
     const { fs, path } = await this.#resolve(uri);
 
-    // VS Code asks us to fail when the file is missing and `create` is false.
-    // Core has no equivalent flag, so the check belongs here.
-    if (!options.create) {
-      await translate(() => fs.stat(path), uri);
+    // Did it exist *before* this write? Asked here because afterwards the
+    // answer is always yes, and `options.create` cannot answer it: VS Code
+    // sends `create: true` on every ordinary save, so trusting it reports a
+    // file created that was only modified.
+    //
+    // For `create: true` this is an added stat, but ManagedFileSystem serves
+    // it from EntryCache and VS Code stats before saving anyway for its own
+    // conflict detection, so in the editor path it costs no round trip.
+    //
+    // When `create` is true — every ordinary save — a stat that fails for any
+    // reason other than "absent" must not abort the write. Its answer is only
+    // used to classify the change event, and refusing to save because we could
+    // not classify it would trade a cosmetic bug for a lost edit. When `create`
+    // is false the caller explicitly required the file to exist, so there the
+    // failure is the answer and propagates.
+    let existed: boolean;
+    try {
+      await fs.stat(path);
+      existed = true;
+    } catch (error) {
+      const absent = OmniFsError.is(error) && error.code === 'NotFound';
+      if (!options.create) {
+        throw absent ? vscode.FileSystemError.FileNotFound(uri) : toVsCodeError(error, uri);
+      }
+      existed = !absent; // unknown ⇒ Changed: the bug was claiming Created for a file already there
     }
 
     await translate(() => fs.writeFile(path, content, { overwrite: options.overwrite }), uri);
-    this.#fire(options.create ? vscode.FileChangeType.Created : vscode.FileChangeType.Changed, uri);
+    this.#fire(existed ? vscode.FileChangeType.Changed : vscode.FileChangeType.Created, uri);
   }
 
   async delete(uri: vscode.Uri, options: { recursive: boolean }): Promise<void> {
