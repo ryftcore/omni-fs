@@ -65,6 +65,8 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
     case STATUS.PERMISSION_DENIED:
       return new OmniFsError({ ...base, code: 'PermissionDenied', message });
     case STATUS.BAD_MESSAGE:
+      // `ProtocolError` is retryable by default; this one is not, because a
+      // malformed protocol message will not un-malform on an identical retry.
       return new OmniFsError({ ...base, code: 'ProtocolError', message, retryable: false });
     case STATUS.NO_CONNECTION:
     case STATUS.CONNECTION_LOST:

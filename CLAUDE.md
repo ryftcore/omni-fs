@@ -150,7 +150,10 @@ protocol meets it, which is why a provider is finished exactly when it passes.
   linting, including the boundary rule. Dependabot ignores `typescript >=7`.
 - **`@types/node` is held at 22** to match `engines.node`, so code cannot
   compile against APIs missing at runtime. Same for `@types/vscode` vs
-  `engines.vscode`.
+  `engines.vscode`. The guarantee covers our own files only: a transitive
+  `@types/node@18` reaches the lockfile through `@types/ssh2`, and what keeps it
+  out of our compilation is `tsconfig.base.json`'s explicit `types: ["node"]`
+  plus `skipLibCheck`, not the pin.
 - `tsconfig.base.json` names `lib`/`types` explicitly because TS 6 stopped
   auto-including `@types` packages. Strictness is high:
   `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`,

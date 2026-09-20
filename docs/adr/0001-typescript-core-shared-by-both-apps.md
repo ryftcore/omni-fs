@@ -35,3 +35,12 @@ Very large transfers will be slower than a Rust implementation.
 serialisable arguments, `AbortSignal` for cancellation, streams for payloads, no
 callbacks across the boundary. If performance later justifies a Rust core, it
 can be introduced behind this same interface without touching either host.
+
+## Superseded in part (2026-09-20)
+
+The SDK list above names `ssh2-sftp-client` for SFTP. `packages/provider-sftp`
+uses `ssh2` directly instead — the wrapper's types are three majors behind its
+runtime, and it hides the protocol features the provider is built on (`open()`
+flags, the OpenSSH rename, fsync and copy-data extensions, and unflattened
+errors). See `docs/superpowers/specs/2026-09-20-provider-sftp-design.md`,
+decision 1. Nothing else in this decision changes.

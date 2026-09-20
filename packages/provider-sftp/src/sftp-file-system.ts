@@ -333,14 +333,21 @@ export class SftpFileSystem implements RemoteFileSystem {
   }
 
   /**
-   * Names a failed write. An exclusive open answers status 4 when the path is
-   * already taken, and only this call site knows the open was exclusive — the
-   * same narrowing `provider-webdav` does for 405 on `MKCOL`.
+   * Names a failed write: any status 4 from an exclusive write is "the path is
+   * already taken".
+   *
+   * Broader than the open it is really about — the write opens, writes, flushes
+   * and closes, and this reads a status 4 from any of those the same way. Status
+   * 4 carries nothing to tell them apart, and under `wx` the exclusion is the
+   * one thing the caller asked to be told about, so `AlreadyExists` is the
+   * likely reading where `Unknown` would be the useless one. Only this call
+   * site knows the write was exclusive, which is why the narrowing lives here
+   * and not in `errors.ts` — the same narrowing `provider-webdav` does for 405
+   * on `MKCOL`.
    */
   #writeError(error: unknown, path: RemotePath, flags: SftpWriteFlags): OmniFsError {
     if (flags !== 'wx' || !isFailure(error)) return toOmniFsError(error, path.value);
 
-    // The exclusive open lost the race: the path is taken.
     return this.#occupiedError(path, error);
   }
 
