@@ -225,6 +225,15 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
   }
 
   async #copyByStream(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
+    // A directory has no stream to read. This layer advertises `canRename` on
+    // providers that cannot rename, and renaming a folder is an ordinary thing
+    // to do in a file tree, so the emulated copy has to handle one.
+    const stat = await this.#inner.stat(from, options?.signal);
+    if (stat.type === 'directory') {
+      await this.#copyDirectory(from, to, options);
+      return;
+    }
+
     const source = await this.#inner.createReadStream(
       from,
       options?.signal ? { signal: options.signal } : undefined,
@@ -252,6 +261,35 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
       ...(options?.signal ? { signal: options.signal } : {}),
       contentLength: buffered.byteLength,
     });
+  }
+
+  /**
+   * Copies a directory child by child, for providers that cannot copy
+   * server-side. On a prefix-only store there is no directory entry to create —
+   * the prefix reappears at the target as soon as the first child lands.
+   */
+  async #copyDirectory(
+    from: RemotePath,
+    to: RemotePath,
+    options?: OverwriteOptions,
+  ): Promise<void> {
+    if (this.#inner.capabilities.hasRealDirectories && this.#inner.createDirectory !== undefined) {
+      try {
+        await this.#inner.createDirectory(to, options?.signal);
+      } catch (error) {
+        if (!(OmniFsError.is(error) && error.code === 'AlreadyExists')) throw error;
+      }
+    }
+
+    // Buffered before recursing, for the same reason as the recursive delete:
+    // a protocol with one control channel cannot copy a file while a listing is
+    // still open on it.
+    const children: DirEntry[] = [];
+    for await (const entry of this.#inner.list(from, options?.signal)) children.push(entry);
+
+    for (const child of children) {
+      await this.#copyByStream(child.path, to.join(child.name), options);
+    }
   }
 
   /** Depth-first delete for providers without a recursive delete call. */
