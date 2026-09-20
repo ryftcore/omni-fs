@@ -1268,6 +1268,31 @@ git commit -m ":sparkles: feat assemble sftp credentials for password, private k
 
 ### Task 5: The session — connection, the abort race, and the request-shaped calls
 
+> **Corrected during execution.** Four defects in this task's code blocks were found by review and
+> fixed in `packages/provider-sftp/src/sftp-session.ts`, which is the authority — read it before
+> re-applying anything below.
+>
+> 1. The persistent `client.on('error')`/`client.on('close')` listeners must be registered
+>    immediately after `new Client()`, **not** after `await client.sftp(...)`. As written below they
+>    left a window — authenticated, channel opening — where a dropped connection emits `error` with
+>    no listener, which is fatal to the host process: in VS Code, the whole extension host. The
+>    listeners close over a `let session: SftpSession | undefined = undefined` they no-op against
+>    until it is assigned; the explicit initialiser is load-bearing, because a `const` at the
+>    assignment site would leave them referencing it in the temporal dead zone.
+> 2. `open()` must end the client on every failing path, and re-check `signal?.aborted` after the
+>    channel opens. As written it abandoned an authenticated connection whenever anything after
+>    `connect` failed — a server refusing the `sftp` subsystem leaves the socket alive with no handle
+>    able to close it — and it ignored an abort that arrived after the connect race settled, handing a
+>    live session to a caller that had already cancelled.
+> 3. `close()` must clear `#alive` unconditionally, before its early returns, or `isAlive()` keeps
+>    claiming a closed session is usable.
+> 4. Cancellations are built by a module-scope `cancelled()` helper carrying `providerId: 'sftp'`,
+>    not by `OmniFsError.cancelled`, which drops it — the same reason `errors.ts` stopped using that
+>    factory in Task 2.
+>
+> `SftpAuth`'s optional fields in `auth.ts` also lost their `| undefined` so that `ConnectConfig`'s
+> exact-optional fields accept the single `...auth` spread this task's code uses.
+
 **Files:**
 
 - Create: `packages/provider-sftp/src/sftp-session.ts`
