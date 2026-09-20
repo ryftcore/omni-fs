@@ -1,6 +1,9 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { fingerprint, parseKnownHosts, verifyHostKey } from './known-hosts.js';
+import { fingerprint, parseKnownHosts, readKnownHosts, verifyHostKey } from './known-hosts.js';
 
 /** An SSH wire-format public key blob: length-prefixed type, then the body. */
 function keyBlob(type: string, body: string): Buffer {
@@ -75,6 +78,35 @@ describe('verifyHostKey', () => {
     expect(verifyHostKey(entries, 'sftp.example.com', 22, ours)).toBe('mismatch');
   });
 
+  it('refuses a revoked key even when a stale plain line for it comes first', () => {
+    const text = [
+      line('sftp.example.com', ours),
+      `@revoked ${line('sftp.example.com', ours)}`,
+    ].join('\n');
+    const entries = parseKnownHosts(text);
+    expect(verifyHostKey(entries, 'sftp.example.com', 22, ours)).toBe('mismatch');
+  });
+
+  it('refuses a revoked key when the revocation line comes first', () => {
+    const text = [
+      `@revoked ${line('sftp.example.com', ours)}`,
+      line('sftp.example.com', ours),
+    ].join('\n');
+    const entries = parseKnownHosts(text);
+    expect(verifyHostKey(entries, 'sftp.example.com', 22, ours)).toBe('mismatch');
+  });
+
+  it('recognises a revocation marker regardless of case', () => {
+    const entries = parseKnownHosts(`@Revoked ${line('sftp.example.com', ours)}`);
+    expect(verifyHostKey(entries, 'sftp.example.com', 22, ours)).toBe('mismatch');
+  });
+
+  it('drops a line with a marker it does not recognise, rather than trusting the rest of it', () => {
+    const entries = parseKnownHosts(`@bogus ${line('sftp.example.com', theirs)}`);
+    expect(entries).toHaveLength(0);
+    expect(verifyHostKey(entries, 'sftp.example.com', 22, ours)).toBe('unknown');
+  });
+
   it('ignores a certificate authority line, since certificates are out of scope', () => {
     const entries = parseKnownHosts(`@cert-authority ${line('*.example.com', theirs)}`);
     expect(entries).toHaveLength(0);
@@ -96,5 +128,23 @@ describe('fingerprint', () => {
     const printed = fingerprint(ours);
     expect(printed.startsWith('SHA256:')).toBe(true);
     expect(printed).not.toContain('=');
+  });
+});
+
+describe('readKnownHosts', () => {
+  it('reads and parses a real file from disk', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'omni-fs-sftp-known-hosts-'));
+    const path = join(dir, 'known_hosts');
+    await writeFile(path, line('sftp.example.com', ours));
+
+    const entries = await readKnownHosts(path);
+    expect(verifyHostKey(entries, 'sftp.example.com', 22, ours)).toBe('match');
+  });
+
+  it('treats a missing file as no entries rather than throwing', async () => {
+    const entries = await readKnownHosts(
+      join(tmpdir(), 'omni-fs-sftp-known-hosts-definitely-absent'),
+    );
+    expect(entries).toEqual([]);
   });
 });

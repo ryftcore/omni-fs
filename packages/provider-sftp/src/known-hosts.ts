@@ -1,5 +1,5 @@
 import { createHash, createHmac } from 'node:crypto';
-import { expandHome, readLocalFile } from './local-files.js';
+import { readLocalFile } from './local-files.js';
 
 export type HostKeyVerdict = 'match' | 'mismatch' | 'unknown';
 
@@ -34,12 +34,17 @@ export function parseKnownHosts(text: string): readonly KnownHostEntry[] {
     const fields = line.split(/\s+/);
     let revoked = false;
     let certAuthority = false;
+    let unrecognisedMarker = false;
     while (fields[0]?.startsWith('@') === true) {
-      const marker = fields.shift();
+      const marker = fields.shift()?.toLowerCase();
       if (marker === '@revoked') revoked = true;
-      if (marker === '@cert-authority') certAuthority = true;
+      else if (marker === '@cert-authority') certAuthority = true;
+      else unrecognisedMarker = true;
     }
-    if (certAuthority) continue;
+    // A marker we do not understand makes the whole line unusable, which is
+    // what OpenSSH does with it. Stripping it and trusting the rest is how a
+    // misspelled revocation becomes a trusted key.
+    if (certAuthority || unrecognisedMarker) continue;
 
     const [hosts, , keyBase64] = fields;
     if (hosts === undefined || keyBase64 === undefined || keyBase64 === '') continue;
@@ -75,8 +80,16 @@ export function verifyHostKey(
   const offeredType = keyType(key);
   const matching = entries.filter((entry) => matchesHost(entry, host, port));
 
+  // Revocation wins whatever order the file lists things in. `ssh-keygen -R`
+  // removes the old line, but appending `@revoked` by hand and leaving the
+  // stale line above it is just as common — and OpenSSH refuses the key either
+  // way. Deciding this inside the match loop would let line order matter.
+  if (matching.some((entry) => entry.revoked && entry.keyBase64 === offered)) {
+    return 'mismatch';
+  }
+
   for (const entry of matching) {
-    if (entry.keyBase64 === offered) return entry.revoked ? 'mismatch' : 'match';
+    if (entry.keyBase64 === offered) return 'match';
   }
   for (const entry of matching) {
     if (keyType(Buffer.from(entry.keyBase64, 'base64')) === offeredType) return 'mismatch';
@@ -94,12 +107,13 @@ export function fingerprint(key: Buffer): string {
  * that is absent or unreadable is no entries, which means every host is unseen.
  */
 export async function readKnownHosts(path: string | undefined): Promise<readonly KnownHostEntry[]> {
+  let text: string;
   try {
-    const file = await readLocalFile(expandHome(path ?? '~/.ssh/known_hosts'));
-    return parseKnownHosts(file.toString('utf8'));
+    text = (await readLocalFile(path ?? '~/.ssh/known_hosts')).toString('utf8');
   } catch {
     return [];
   }
+  return parseKnownHosts(text);
 }
 
 /**
