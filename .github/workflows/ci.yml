@@ -81,18 +81,26 @@ jobs:
       # saves: it skips the upload on an exact key hit, so a key pinned only to
       # the lockfile would re-download 150 MB on every run after a release and
       # store none of it. A weekly stamp bounds that to one run in seven days.
+      # `%G` rather than `%Y`: it is the ISO week-numbering year that belongs
+      # with `%V`, so the first days of a January cannot reuse a key from the
+      # year before.
       - id: stamp
-        run: echo "week=$(date -u +%Y-%V)" >> "$GITHUB_OUTPUT"
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
         shell: bash
 
       # Only the editor download. The rest of .vscode-test is the runner's
       # user-data and extensions directories, which must not persist between
       # runs — stale omniFs.connections state would leak across jobs.
+      #
+      # `github.job` is in the key because this job's ubuntu leg and
+      # `extension-tests-live` both resolve `runner.os` to Linux: one key for
+      # both means whichever finishes second loses the save to a
+      # ReserveCacheError warning, on every run, forever.
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/vscode/.vscode-test/vscode-*
-          key: vscode-test-${{ runner.os }}-${{ steps.stamp.outputs.week }}
-          restore-keys: vscode-test-${{ runner.os }}-
+          key: vscode-test-${{ runner.os }}-${{ github.job }}-${{ steps.stamp.outputs.week }}
+          restore-keys: vscode-test-${{ runner.os }}-${{ github.job }}-
 
       # Electron needs a display. Linux runners are headless, so xvfb provides
       # a virtual one; macOS and Windows runners have a real window server.
@@ -121,14 +129,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - id: stamp
-        run: echo "week=$(date -u +%Y-%V)" >> "$GITHUB_OUTPUT"
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
         shell: bash
 
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/vscode/.vscode-test/vscode-*
-          key: vscode-test-${{ runner.os }}-${{ steps.stamp.outputs.week }}
-          restore-keys: vscode-test-${{ runner.os }}-
+          key: vscode-test-${{ runner.os }}-${{ github.job }}-${{ steps.stamp.outputs.week }}
+          restore-keys: vscode-test-${{ runner.os }}-${{ github.job }}-
 
       # package:vsix leaves out/ holding the minified production build, which
       # is the artifact the live label exists to test. A plain `pnpm build`
@@ -140,6 +148,12 @@ jobs:
       - run: docker compose up -d
 
       - run: xvfb-run -a pnpm test:extension:live
+
+      # The one job a contributor cannot reproduce without Docker, and a
+      # container that never came up reaches the log as a single Mocha
+      # assertion. Failure-only, so the green path pays nothing.
+      - if: failure()
+        run: docker compose ps && docker compose logs --tail=50
 
   boundary:
     name: architecture boundary
