@@ -17,7 +17,7 @@
     "dev": "tsc -b --watch",
     "typecheck": "tsc -b --noEmit false --emitDeclarationOnly",
     "lint": "eslint src",
-    "test": "vitest run --passWithNoTests",
+    "test": "vitest run",
     "test:conformance": "vitest run --config vitest.conformance.config.ts",
     "clean": "rm -rf dist *.tsbuildinfo"
   },

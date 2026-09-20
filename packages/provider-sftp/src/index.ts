@@ -9,9 +9,9 @@ import type {
   ReadOptions,
   RemoteFileSystem,
   RemotePath,
-  SettingsSchema,
   WriteOptions,
 } from '@omni-fs/core';
+import { SFTP_SECRET_SCHEMA, SFTP_SETTINGS_SCHEMA } from './settings.js';
 
 /**
  * SFTP over SSH.
@@ -25,51 +25,6 @@ import type {
  * too, which is why both live behind the `SecretStore` port rather than in the
  * connection settings.
  */
-export const SFTP_SETTINGS_SCHEMA: SettingsSchema = {
-  fields: [
-    { kind: 'text', key: 'host', label: 'Host', required: true, placeholder: 'sftp.example.com' },
-    { kind: 'number', key: 'port', label: 'Port', default: 22, min: 1, max: 65535 },
-    { kind: 'text', key: 'username', label: 'Username', required: true },
-    {
-      kind: 'select',
-      key: 'authMethod',
-      label: 'Authentication',
-      required: true,
-      default: 'password',
-      options: [
-        { value: 'password', label: 'Password' },
-        { value: 'privateKey', label: 'Private key' },
-        { value: 'agent', label: 'SSH agent' },
-      ],
-    },
-    {
-      kind: 'file',
-      key: 'privateKeyPath',
-      label: 'Private key file',
-      help: 'Used when authentication is set to Private key. e.g. ~/.ssh/id_ed25519',
-    },
-    {
-      kind: 'text',
-      key: 'rootPrefix',
-      label: 'Root prefix',
-      placeholder: '/var/www',
-      help: 'Optional. Scopes the connection to a subfolder of the login directory. Begin with / for an absolute server path, e.g. /var/www.',
-    },
-  ],
-};
-
-export const SFTP_SECRET_SCHEMA: SettingsSchema = {
-  fields: [
-    { kind: 'password', key: 'password', label: 'Password', help: 'For password authentication.' },
-    {
-      kind: 'password',
-      key: 'passphrase',
-      label: 'Key passphrase',
-      help: 'For an encrypted private key.',
-    },
-  ],
-};
-
 export const SFTP_CAPABILITIES: ProviderCapabilities = {
   canWrite: true,
   canRename: true,
@@ -168,3 +123,5 @@ export const sftpProvider: ProviderDefinition = {
   defaultCapabilities: SFTP_CAPABILITIES,
   create: (context) => new SftpFileSystem(context),
 };
+
+export { SFTP_SECRET_SCHEMA, SFTP_SETTINGS_SCHEMA } from './settings.js';
