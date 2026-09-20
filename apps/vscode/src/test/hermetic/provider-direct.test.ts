@@ -186,6 +186,40 @@ suite('OmniFileSystemProvider, constructed directly', () => {
         [vscode.FileChangeType.Changed],
       );
     });
+
+    test('writeFile with create: true is still lost on a nested path', async () => {
+      // Where the resilience above stops, recorded rather than fixed. The
+      // sibling case survives only because `/present.txt`'s parent is the
+      // root: `ManagedFileSystem.writeFile` calls `#ensureParents`, which
+      // stats every parent below the root and rethrows anything that is not
+      // NotFound. So under the very fault that case is named for, `/a/b.txt`
+      // does not save.
+      //
+      // Deliberately not fixed here. Letting the parent check proceed through
+      // an arbitrary stat failure changes when a write is attempted against a
+      // server that is misbehaving, which is a core decision with its own
+      // blast radius — not a comment's worth of host-layer resilience.
+      const fixture = await start();
+      fixture.disk.overrideStat(() => {
+        throw new OmniFsError({ code: 'Timeout', message: 'server stopped responding' });
+      });
+
+      await assert.rejects(
+        () =>
+          fixture.provider.writeFile(fixture.uri('/nested/file.txt'), bytes('x'), {
+            create: true,
+            overwrite: true,
+          }),
+        (error: unknown) => isFileSystemError(error, 'Unavailable'),
+      );
+
+      fixture.disk.overrideStat(() => undefined);
+      await assert.rejects(
+        () => fixture.provider.readFile(fixture.uri('/nested/file.txt')),
+        (error: unknown) => isFileSystemError(error, 'FileNotFound'),
+      );
+      assert.deepEqual(fixture.events, []);
+    });
   });
 
   suite('change events', () => {

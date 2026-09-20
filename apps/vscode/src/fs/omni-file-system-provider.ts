@@ -105,16 +105,24 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
     // sends `create: true` on every ordinary save, so trusting it reports a
     // file created that was only modified.
     //
-    // For `create: true` this is an added stat, but ManagedFileSystem serves
-    // it from EntryCache and VS Code stats before saving anyway for its own
-    // conflict detection, so in the editor path it costs no round trip.
+    // For `create: true` this is an added stat. ManagedFileSystem serves it
+    // from EntryCache whenever the path was stat'd inside the TTL, which in
+    // the editor path it is assumed to have been — nothing here proves that,
+    // so treat it as the assumption it is rather than a free call.
     //
     // When `create` is true — every ordinary save — a stat that fails for any
-    // reason other than "absent" must not abort the write. Its answer is only
-    // used to classify the change event, and refusing to save because we could
-    // not classify it would trade a cosmetic bug for a lost edit. When `create`
-    // is false the caller explicitly required the file to exist, so there the
-    // failure is the answer and propagates.
+    // reason other than "absent" must not abort the write *here*. Its answer
+    // is only used to classify the change event, and refusing to save because
+    // we could not classify it would trade a cosmetic bug for a lost edit.
+    //
+    // That resilience is this layer's alone and ends at `fs.writeFile`. For
+    // any path whose parent is not the root, ManagedFileSystem stats that
+    // parent through `#ensureParents` and rethrows anything that is not
+    // NotFound, so the same fault still loses the save — pinned by
+    // `provider-direct.test.ts`, not claimed away.
+    //
+    // When `create` is false the caller explicitly required the file to exist,
+    // so there the failure is the answer and propagates.
     let existed: boolean;
     try {
       await fs.stat(path);
