@@ -478,12 +478,21 @@ export class SftpFileSystem implements RemoteFileSystem {
       );
       try {
         await session.unlink(this.#remote(to), signal);
-      } catch {
-        // The destination was not in the way after all, so the rename failed
-        // for one of the other things status 4 covers — `EXDEV`, `EISDIR`,
-        // `EBUSY`, `ENOTEMPTY`. Report that original failure rather than the
-        // `unlink`'s: answering `NotFound` about `to` would tell the VS Code
-        // host the file is absent, which is what drives create-on-save.
+      } catch (unlinkError) {
+        // A connection that went away during the `unlink` says nothing about
+        // why the rename failed, and it must win: the original status 4
+        // translates to `Unknown`, which is not in core's `DEFAULT_RETRYABLE`
+        // (`packages/core/src/errors.ts:122`) while `ConnectionFailed` is — so
+        // reporting the original here would tell `TransferQueue` a dropped
+        // socket is permanent and it would never try the rename again.
+        const translated = toOmniFsError(unlinkError, to.value);
+        if (isConnectionFailure(translated)) throw translated;
+
+        // Otherwise the destination was not in the way after all, so the rename
+        // failed for one of the other things status 4 covers — `EXDEV`,
+        // `EISDIR`, `EBUSY`, `ENOTEMPTY`. Report that original failure rather
+        // than the `unlink`'s: answering `NotFound` about `to` would tell the
+        // VS Code host the file is absent, which is what drives create-on-save.
         throw toOmniFsError(error, from.value);
       }
 

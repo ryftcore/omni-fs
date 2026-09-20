@@ -32,6 +32,10 @@ export function notFound(): Error & { code: number } {
   return Object.assign(new Error('No such file'), { code: 2 });
 }
 
+export function connectionLost(): Error & { code: number } {
+  return Object.assign(new Error('Connection lost'), { code: 7 });
+}
+
 /** A session whose behaviour each test supplies; anything unset throws. */
 export function fakeSession(
   over: Partial<SftpConnection>,
@@ -264,7 +268,7 @@ describe('SftpFileSystem stat', () => {
           throw notFound();
         },
         lstat: async () => {
-          throw Object.assign(new Error('Connection lost'), { code: 7 });
+          throw connectionLost();
         },
       }),
     );
@@ -880,7 +884,34 @@ describe('SftpFileSystem rename', () => {
         OmniFsError.is(error) &&
         error.code === 'Unknown' &&
         error.message === 'Cross-device link' &&
-        error.path === '/before.txt',
+        error.path === '/before.txt' &&
+        // `Unknown` is not retryable, which is the right answer here: an
+        // identical cross-device rename will fail identically.
+        !error.retryable,
+    );
+  });
+
+  it('reports the lost connection when the clearing unlink is what the socket killed', async () => {
+    // The mirror of the case above, and the reason it cannot simply rethrow the
+    // original: status 4 translates to `Unknown`, which core does not retry, so
+    // reporting it for a dropped socket would tell `TransferQueue` that a
+    // transient failure is permanent and the rename would never be tried again.
+    const { fs } = await connected(
+      fakeSession({
+        rename: async () => {
+          throw failure();
+        },
+        unlink: async () => {
+          throw connectionLost();
+        },
+      }),
+    );
+
+    await expect(
+      fs.rename(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt')),
+    ).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'ConnectionFailed' && error.retryable,
     );
   });
 
