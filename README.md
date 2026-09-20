@@ -109,6 +109,7 @@ so that mixing them up is a compile error.
 - [x] Shared provider conformance suite
 - [x] S3 / S3-compatible provider
 - [x] VS Code `FileSystemProvider`, connections tree, transfers view
+- [x] VS Code extension tested in a real extension host, hermetic and live
 - [ ] FTP / FTPS provider
 - [x] SFTP provider
 - [x] WebDAV provider

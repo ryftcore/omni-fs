@@ -13,6 +13,8 @@ pnpm lint           # eslint at the repo root (not per-package)
 pnpm test
 pnpm format:check   # CI enforces this
 pnpm package:vsix   # -> apps/vscode/*.vsix
+pnpm test:extension        # the extension inside a real VS Code host
+pnpm test:extension:live   # + the compose stack, against the minified bundle
 ```
 
 CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, plus
@@ -25,10 +27,16 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
-`provider-ftp` is the only package without tests. `pnpm test` in
-`packages/testing` is the conformance suite, and is where most behaviour is
-actually verified. `packages/ui` runs its tests without jsdom — its state
-machine is a pure reducer, so there is no DOM to simulate.
+`provider-ftp` is the only package without tests. `apps/vscode` is tested
+separately: `pnpm test:extension` boots the real extension inside an Electron
+extension host and drives `vscode.workspace.fs` over an in-memory provider, and
+`pnpm test:extension:live` runs the _minified_ production bundle against the
+`compose.yaml` servers — the only thing that proves esbuild did not break a
+protocol SDK. Neither joins `pnpm test`, which stays hermetic and fast.
+
+`pnpm test` in `packages/testing` is the conformance suite, and is where most
+behaviour is actually verified. `packages/ui` runs its tests without jsdom —
+its state machine is a pure reducer, so there is no DOM to simulate.
 
 `pnpm package:vsix` goes through turbo on purpose — the extension bundles the
 workspace packages' `dist/`, so `pnpm --filter omni-fs-vscode package` fails on
@@ -144,6 +152,12 @@ The same contract has a live target: a provider package's `test:conformance`
 script runs it against that protocol's server in `compose.yaml`. The hermetic
 runs prove the suite is coherent; the live run is the one that says a real
 protocol meets it, which is why a provider is finished exactly when it passes.
+
+Two test frameworks live here and never meet: Vitest for everything hermetic,
+Mocha inside the extension host for `apps/vscode/src/test/**`. Different turbo
+task, different directory, different compile output (`out-test/`, never
+`out/`), different runner. The extension's tests compile with esbuild rather
+than `tsc` because they import `@omni-fs/testing`, which is ESM-only.
 
 ## Repo constraints
 

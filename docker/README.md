@@ -40,14 +40,37 @@ docker compose up -d
 pnpm test:conformance
 ```
 
-`packages/provider-webdav` and `packages/provider-sftp` define the script today,
-so WebDAV and SFTP are what runs. A provider is finished exactly when this
-passes for it.
+`packages/provider-s3`, `packages/provider-webdav` and `packages/provider-sftp`
+all define the script, so all three run. A provider is finished exactly when
+this passes for it.
 
 Every case makes its own `/conformance-<timestamp>-<n>` directory and removes
 it again, so the seeded tree above is what a `PROPFIND` should show both before
 and after a run. Anything called `conformance-*` left behind is a bug in the
 harness, not in the server.
+
+## VS Code extension, against the live servers
+
+The extension's own test suite has a second label that drives the **minified
+production bundle** at these servers through `vscode.workspace.fs` — the only
+thing that proves esbuild did not break a protocol SDK while flattening four of
+them into one file:
+
+```bash
+pnpm package:vsix        # leaves out/ holding the minified build
+docker compose up -d
+pnpm test:extension:live
+```
+
+`pnpm package:vsix` first is not optional: a plain `pnpm build` leaves an
+unminified bundle in `out/`, and the label would then test something that is
+not what ships. On a headless Linux box, prefix the last command with
+`xvfb-run -a`.
+
+It creates one `/omnifs-ext-live-<timestamp>-<pid>` directory per server and
+removes it again, so the seeded tree above is what you should see both before
+and after. It never skips: with nothing running it retries for 60 seconds and
+then fails, naming the server.
 
 ## S3 — MinIO
 
