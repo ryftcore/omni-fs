@@ -172,6 +172,44 @@ export function runConformanceSuite(harness: ConformanceHarness): void {
       });
     });
 
+    it('refuses a write whose ifMatch token is stale', async () => {
+      await withFs(async (fs, root) => {
+        if (!fs.capabilities.canWrite || !fs.capabilities.hasVersionTokens) return;
+
+        const path = root.join('contested.txt');
+        await fs.writeFile(path, new TextEncoder().encode('original'));
+
+        // What an editor holds while the user types.
+        const held = (await fs.stat(path)).etag;
+        expect(held).toBeDefined();
+
+        // Someone else saves in the meantime.
+        await fs.writeFile(path, new TextEncoder().encode('theirs'));
+        expect((await fs.stat(path)).etag).not.toBe(held);
+
+        await expect(
+          fs.writeFile(path, new TextEncoder().encode('mine'), { ifMatch: held }),
+        ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'Conflict');
+
+        // The point of the refusal: their save is still there.
+        expect(new TextDecoder().decode(await fs.readFile(path))).toBe('theirs');
+      });
+    });
+
+    it('accepts a write whose ifMatch token is current', async () => {
+      await withFs(async (fs, root) => {
+        if (!fs.capabilities.canWrite || !fs.capabilities.hasVersionTokens) return;
+
+        const path = root.join('uncontested.txt');
+        await fs.writeFile(path, new TextEncoder().encode('original'));
+
+        const current = (await fs.stat(path)).etag;
+        await fs.writeFile(path, new TextEncoder().encode('mine'), { ifMatch: current });
+
+        expect(new TextDecoder().decode(await fs.readFile(path))).toBe('mine');
+      });
+    });
+
     it('reads a byte range', async () => {
       await withFs(async (fs, root) => {
         if (!fs.capabilities.canWrite || !fs.capabilities.canReadRange) return;

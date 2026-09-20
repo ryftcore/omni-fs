@@ -34,7 +34,9 @@ export class MemoryFileSystem implements RemoteFileSystem {
   readonly #files = new Map<string, Uint8Array>();
   readonly #directories = new Set<string>(['/']);
   readonly #mtimes = new Map<string, number>();
+  readonly #etags = new Map<string, string>();
   readonly #latencyMs: number;
+  #revision = 0;
   #connected = false;
 
   constructor(options: MemoryFileSystemOptions = {}) {
@@ -50,7 +52,7 @@ export class MemoryFileSystem implements RemoteFileSystem {
       canWatch: false,
       hasRealDirectories: true,
       preservesMTime: true,
-      hasVersionTokens: false,
+      hasVersionTokens: true,
       maxConcurrency: 8,
       listIsPaginated: false,
       ...options.capabilities,
@@ -71,7 +73,12 @@ export class MemoryFileSystem implements RemoteFileSystem {
 
     if (this.#files.has(path.value)) {
       const data = this.#files.get(path.value)!;
-      return { type: 'file', size: data.byteLength, mtime: this.#mtimes.get(path.value) };
+      return {
+        type: 'file',
+        size: data.byteLength,
+        mtime: this.#mtimes.get(path.value),
+        etag: this.#etags.get(path.value),
+      };
     }
     if (this.#isDirectory(path)) return { type: 'directory', size: 0 };
     throw OmniFsError.notFound(path.value);
@@ -98,6 +105,7 @@ export class MemoryFileSystem implements RemoteFileSystem {
             type: 'file',
             size: file.byteLength,
             mtime: this.#mtimes.get(childPath.value),
+            etag: this.#etags.get(childPath.value),
             name,
             path: childPath,
           }
@@ -141,6 +149,15 @@ export class MemoryFileSystem implements RemoteFileSystem {
       throw OmniFsError.alreadyExists(path.value);
     }
 
+    // A token that no longer matches means someone else saved in between. An
+    // absent file never matches: there is no version to have held.
+    if (options?.ifMatch !== undefined && this.#etags.get(path.value) !== options.ifMatch) {
+      throw new OmniFsError({
+        code: 'Conflict',
+        message: `The file changed on the server since it was read: ${path.value}`,
+      });
+    }
+
     // Parents are implied, matching how an object store behaves. A caller that
     // needs real mkdir semantics sets hasRealDirectories and calls it.
     let parent = path.parent;
@@ -151,6 +168,7 @@ export class MemoryFileSystem implements RemoteFileSystem {
 
     this.#files.set(path.value, data);
     this.#mtimes.set(path.value, Date.now());
+    this.#stamp(path.value);
     options?.onProgress?.(data.byteLength, data.byteLength);
   }
 
@@ -181,6 +199,7 @@ export class MemoryFileSystem implements RemoteFileSystem {
 
     if (this.#files.delete(path.value)) {
       this.#mtimes.delete(path.value);
+      this.#etags.delete(path.value);
       return;
     }
 
@@ -198,6 +217,7 @@ export class MemoryFileSystem implements RemoteFileSystem {
     for (const key of children) {
       this.#files.delete(key);
       this.#mtimes.delete(key);
+      this.#etags.delete(key);
       this.#directories.delete(key);
     }
     this.#directories.delete(path.value);
@@ -242,12 +262,22 @@ export class MemoryFileSystem implements RemoteFileSystem {
       const remote = RemotePath.parse(path);
       this.#files.set(remote.value, new TextEncoder().encode(content));
       this.#mtimes.set(remote.value, Date.now());
+      this.#stamp(remote.value);
       let parent = remote.parent;
       while (!parent.isRoot) {
         this.#directories.add(parent.value);
         parent = parent.parent;
       }
     }
+  }
+
+  /**
+   * A fresh opaque version token. Monotonic across the whole filesystem rather
+   * than per path, so a token stale at one path can never come back around.
+   */
+  #stamp(path: string): void {
+    this.#revision += 1;
+    this.#etags.set(path, `"${this.#revision}"`);
   }
 
   #isDirectory(path: RemotePath): boolean {

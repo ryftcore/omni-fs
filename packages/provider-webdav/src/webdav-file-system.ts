@@ -491,10 +491,11 @@ export const WEBDAV_CAPABILITIES: ProviderCapabilities = {
   // present on GET/HEAD, but PROPFIND bodies never include a `getetag`
   // property. The `webdav` client derives both `stat()` and `list()` from
   // PROPFIND, so neither can produce a version token against this server, and
-  // false is simply what is true of it. Nothing currently checks that either
-  // way: the shared suite has no case exercising `ifMatch`, and no case reads
-  // this flag — so declaring it false buys no skip, it just avoids a lie. Real
-  // Nextcloud and sabredav do return `getetag`; see task-4-report.md.
+  // false is simply what is true of it. The shared suite now gates its two
+  // `ifMatch` cases on this flag, so declaring it false is what skips them —
+  // honestly, since without a token from `stat()` there is nothing to hold.
+  // Real Nextcloud and sabredav do return `getetag`; a provider that detects
+  // one should flip this and inherit both cases. See task-4-report.md.
   hasVersionTokens: false,
   maxConcurrency: 6,
   listIsPaginated: false,
