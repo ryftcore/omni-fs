@@ -1750,6 +1750,31 @@ git commit -m ":sparkles: feat add an sftp session that races every request agai
 
 ### Task 6: The session's streaming half — writeAll, copyData and both streams
 
+> **Corrected during execution.** Three defects in this task's code were found by review and fixed in
+> `packages/provider-sftp/src/sftp-session.ts`, which is the authority — read it before re-applying
+> anything below. The first two are the reason this task exists at all, so they matter most.
+>
+> 1. `openWriteStream` released the SFTP handle only on the fully successful path. A rejecting flush
+>    — this task's own "Quota exceeded" case — skipped the close, as did a rejecting `end()`, and a
+>    failed chunk write meant `close()` never ran. `abort:` is **not** a fallback: per the Streams
+>    spec a sink whose `write` or `close` rejects puts the stream into `errored`, and aborting an
+>    errored stream rejects with the stored error without invoking the sink's `abort`. Every terminal
+>    path now calls one flag-guarded `release()`.
+> 2. A failed streaming write emitted `error` on the ssh2 stream with nothing listening. Node hands
+>    the failure to the per-chunk callback **and then** emits `error`, and ssh2 forces
+>    `emitClose:false`/`autoDestroy:false`, so the unheard event is an uncaught exception — fatal to
+>    the host process. One persistent latching listener is attached at creation and never removed,
+>    which also replaces the `once('error', reject)`/`removeListener` dance inside `close()`. A bare
+>    `emit('error')` between chunks does not set `state.errored`, so `end()` still reports success —
+>    the latch check between `end` and the flush is what makes `close()` reject.
+> 3. `copyData` used nested `finally { await closeHandle }`, so a failing handle-close replaced the
+>    copy's error — the opposite of the first-failure-wins rule `writeAll` documents. It now records
+>    the failure, closes both handles with `failure ??= error`, and throws once.
+>
+> The tests could not see defects 1 and 2 because the fake substituted a `PassThrough`. Error-path
+> cases now use `new Writable({ autoDestroy: false, emitClose: false, ... })` — the flags ssh2
+> hard-codes — so the real semantics are exercised.
+
 **Files:**
 
 - Modify: `packages/provider-sftp/src/sftp-session.ts`
