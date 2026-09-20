@@ -1,3 +1,4 @@
+import { PassThrough, Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { NOOP_LOGGER, OmniFsError } from '@omni-fs/core';
 import type { SFTPWrapper } from 'ssh2';
@@ -104,6 +105,165 @@ describe('SftpSession lifecycle', () => {
     const fs = session({});
     await fs.close();
     expect(fs.isAlive()).toBe(false);
+  });
+});
+
+describe('SftpSession writes', () => {
+  interface WriteLog {
+    opened: { path: string; flags: string }[];
+    written: Buffer[];
+    fsynced: number;
+    closed: number;
+  }
+
+  function writeChannel(over: Record<string, unknown> = {}): {
+    channel: Record<string, unknown>;
+    log: WriteLog;
+  } {
+    const log: WriteLog = { opened: [], written: [], fsynced: 0, closed: 0 };
+    const channel = {
+      open: (path: string, flags: string, cb: Reply<Buffer>) => {
+        log.opened.push({ path, flags });
+        cb(undefined, Buffer.from('handle'));
+      },
+      write: (_h: Buffer, buffer: Buffer, _o: number, _l: number, _p: number, cb: Reply) => {
+        log.written.push(Buffer.from(buffer));
+        cb(undefined);
+      },
+      ext_openssh_fsync: (_h: Buffer, cb: Reply) => {
+        log.fsynced += 1;
+        cb(undefined);
+      },
+      close: (_h: Buffer, cb: Reply) => {
+        log.closed += 1;
+        cb(undefined);
+      },
+      ...over,
+    };
+    return { channel, log };
+  }
+
+  it('writes a whole buffer through one open, flush and close', async () => {
+    const { channel, log } = writeChannel();
+    const fs = session(channel, { posixRename: false, fsync: true, copyData: false });
+
+    await fs.writeAll('/data/a.txt', new TextEncoder().encode('hello'), 'w');
+
+    expect(log.opened).toEqual([{ path: '/data/a.txt', flags: 'w' }]);
+    expect(Buffer.concat(log.written).toString('utf8')).toBe('hello');
+    expect(log.fsynced).toBe(1);
+    expect(log.closed).toBe(1);
+  });
+
+  it('opens exclusively when asked to, so the server refuses an existing file', async () => {
+    const { channel, log } = writeChannel();
+    await session(channel).writeAll('/data/a.txt', new Uint8Array(), 'wx');
+    expect(log.opened[0]?.flags).toBe('wx');
+  });
+
+  it('skips the flush on a server without fsync@openssh.com', async () => {
+    const { channel, log } = writeChannel();
+    await session(channel).writeAll('/data/a.txt', new TextEncoder().encode('hi'), 'w');
+    expect(log.fsynced).toBe(0);
+    expect(log.closed).toBe(1);
+  });
+
+  it('closes the handle even when the write fails, and reports the write failure', async () => {
+    const failure = Object.assign(new Error('Failure'), { code: 4 });
+    const { channel, log } = writeChannel({
+      write: (_h: Buffer, _b: Buffer, _o: number, _l: number, _p: number, cb: Reply) => cb(failure),
+    });
+
+    await expect(
+      session(channel).writeAll('/data/a.txt', new TextEncoder().encode('hi'), 'w'),
+    ).rejects.toBe(failure);
+    expect(log.closed).toBe(1);
+  });
+
+  it('refuses a server-side copy the server never announced', async () => {
+    const { channel } = writeChannel();
+    await expect(session(channel).copyData('/a', '/b', 'w')).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Unsupported',
+    );
+  });
+
+  it('copies with copy-data, reading to EOF and closing both handles', async () => {
+    let call: { srcOffset: number; len: number; dstOffset: number } | undefined;
+    const { channel, log } = writeChannel({
+      ext_copy_data: (
+        _src: Buffer,
+        srcOffset: number,
+        len: number,
+        _dst: Buffer,
+        dstOffset: number,
+        cb: Reply,
+      ) => {
+        call = { srcOffset, len, dstOffset };
+        cb(undefined);
+      },
+    });
+    const fs = session(channel, { posixRename: false, fsync: false, copyData: true });
+
+    await fs.copyData('/data/from.txt', '/data/to.txt', 'w');
+
+    expect(log.opened).toEqual([
+      { path: '/data/from.txt', flags: 'r' },
+      { path: '/data/to.txt', flags: 'w' },
+    ]);
+    // length 0 means "read the source until EOF"
+    expect(call).toEqual({ srcOffset: 0, len: 0, dstOffset: 0 });
+    expect(log.closed).toBe(2);
+  });
+
+  it('holds the write stream open until the bytes are flushed and the handle is closed', async () => {
+    const sink = new PassThrough();
+    const chunks: Buffer[] = [];
+    sink.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const { channel, log } = writeChannel({ createWriteStream: () => sink });
+    const fs = session(channel, { posixRename: false, fsync: true, copyData: false });
+
+    const stream = await fs.openWriteStream('/data/streamed.txt', 'w');
+    const writer = stream.getWriter();
+    await writer.write(new TextEncoder().encode('first-'));
+    await writer.write(new TextEncoder().encode('second'));
+    await writer.close();
+
+    expect(Buffer.concat(chunks).toString('utf8')).toBe('first-second');
+    expect(log.fsynced).toBe(1);
+    expect(log.closed).toBe(1);
+  });
+
+  it('fails close() when the server rejects the flush, rather than claiming the write landed', async () => {
+    const sink = new PassThrough();
+    sink.resume();
+    const { channel } = writeChannel({
+      createWriteStream: () => sink,
+      ext_openssh_fsync: (_h: Buffer, cb: Reply) => cb(new Error('Quota exceeded')),
+    });
+    const fs = session(channel, { posixRename: false, fsync: true, copyData: false });
+
+    const stream = await fs.openWriteStream('/data/streamed.txt', 'w');
+    const writer = stream.getWriter();
+    await writer.write(new TextEncoder().encode('bytes'));
+
+    await expect(writer.close()).rejects.toThrow('Quota exceeded');
+  });
+
+  it('passes an inclusive byte range to the read stream', async () => {
+    let options: { start?: number; end?: number } | undefined;
+    const { channel } = writeChannel({
+      createReadStream: (_path: string, opts: { start?: number; end?: number }) => {
+        options = opts;
+        return Readable.from([Buffer.from('234')]);
+      },
+    });
+
+    const stream = await session(channel).openReadStream('/data/ranged.txt', { start: 2, end: 4 });
+    const reader = stream.getReader();
+    const first = await reader.read();
+
+    expect(options).toEqual({ start: 2, end: 4 });
+    expect(Buffer.from(first.value as Uint8Array).toString('utf8')).toBe('234');
   });
 });
 

@@ -1,3 +1,4 @@
+import { Readable, type Writable } from 'node:stream';
 import { Client } from 'ssh2';
 import type { ConnectConfig, FileEntryWithStats, SFTPWrapper, Stats } from 'ssh2';
 import { OmniFsError } from '@omni-fs/core';
@@ -42,6 +43,41 @@ export interface SftpRequests {
   realpath(path: string, signal?: AbortSignal): Promise<string>;
 }
 
+/** `w` truncates or creates; `wx` fails when the path already exists, on the server. */
+export type SftpWriteFlags = 'w' | 'wx';
+
+export interface SftpReadRange {
+  readonly start?: number | undefined;
+  /** Inclusive, as `ssh2` wants it. */
+  readonly end?: number | undefined;
+  readonly signal?: AbortSignal | undefined;
+}
+
+export interface SftpApi extends SftpRequests {
+  writeAll(
+    path: string,
+    data: Uint8Array,
+    flags: SftpWriteFlags,
+    signal?: AbortSignal,
+  ): Promise<void>;
+  /** `copy-data`. Throws `Unsupported` when the server did not announce it. */
+  copyData(from: string, to: string, flags: SftpWriteFlags, signal?: AbortSignal): Promise<void>;
+  openReadStream(path: string, range?: SftpReadRange): Promise<ReadableStream<Uint8Array>>;
+  openWriteStream(
+    path: string,
+    flags: SftpWriteFlags,
+    signal?: AbortSignal,
+  ): Promise<WritableStream<Uint8Array>>;
+}
+
+export interface SftpConnection extends SftpApi {
+  isAlive(): boolean;
+  close(): Promise<void>;
+}
+
+/** How the file system opens a session. Replaced by a fake in the hermetic tests. */
+export type OpenSession = (options: SftpSessionOptions) => Promise<SftpConnection>;
+
 export interface SftpSessionOptions {
   readonly settings: SftpSettings;
   /** Already resolved by the caller, so the session never sees `ProviderContext`. */
@@ -64,7 +100,7 @@ export interface SftpSessionOptions {
  * alternative is tearing down the connection, which would cancel every other
  * operation sharing it.
  */
-export class SftpSession implements SftpRequests {
+export class SftpSession implements SftpConnection {
   readonly extensions: SftpExtensions;
 
   readonly #sftp: SFTPWrapper;
@@ -252,6 +288,166 @@ export class SftpSession implements SftpRequests {
 
   async realpath(path: string, signal?: AbortSignal): Promise<string> {
     return this.#request<string>(signal, (cb) => this.#sftp.realpath(path, cb));
+  }
+
+  /**
+   * Open, write, flush, close.
+   *
+   * `ssh2` chunks a buffer larger than the negotiated maximum itself and calls
+   * back once at the end (`lib/protocol/SFTP.js:446`), so the whole payload goes
+   * in one call. The first failure wins: a write error is reported even when the
+   * close that follows also fails, because the write is the one the caller asked
+   * about.
+   */
+  async writeAll(
+    path: string,
+    data: Uint8Array,
+    flags: SftpWriteFlags,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const handle = await this.#open(path, flags, signal);
+    let failure: unknown;
+
+    try {
+      if (data.byteLength > 0) {
+        const buffer = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
+        await this.#request<void>(signal, (cb) =>
+          this.#sftp.write(handle, buffer, 0, buffer.byteLength, 0, cb),
+        );
+      }
+      await this.#flush(handle, signal);
+    } catch (error) {
+      failure = error;
+    }
+
+    try {
+      await this.#closeHandle(handle);
+    } catch (error) {
+      failure ??= error;
+    }
+
+    if (failure !== undefined) throw failure;
+  }
+
+  /**
+   * `copy-data`: the server reads from one handle and writes to another, so the
+   * bytes never cross the client. `len: 0` means "until EOF" (`ssh2`'s
+   * `SFTP.md`).
+   */
+  async copyData(
+    from: string,
+    to: string,
+    flags: SftpWriteFlags,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    if (!this.extensions.copyData) {
+      throw OmniFsError.unsupported('server-side copy', 'sftp');
+    }
+
+    const source = await this.#open(from, 'r', signal);
+    try {
+      const target = await this.#open(to, flags, signal);
+      try {
+        await this.#request<void>(signal, (cb) =>
+          this.#sftp.ext_copy_data(source, 0, 0, target, 0, cb),
+        );
+        await this.#flush(target, signal);
+      } finally {
+        await this.#closeHandle(target);
+      }
+    } finally {
+      await this.#closeHandle(source);
+    }
+  }
+
+  /**
+   * A Node read stream translated to a web one. Errors arrive late — the library
+   * returns the stream before the request is answered — so a missing file
+   * surfaces as an error event, which the file system layer translates.
+   * Aborting destroys the stream with an `AbortError`, which is real
+   * cancellation rather than the abandonment a request-shaped call has to settle
+   * for.
+   */
+  async openReadStream(path: string, range?: SftpReadRange): Promise<ReadableStream<Uint8Array>> {
+    if (range?.signal?.aborted === true) throw cancelled(path);
+
+    const stream = this.#sftp.createReadStream(path, {
+      ...(range?.start !== undefined ? { start: range.start } : {}),
+      ...(range?.end !== undefined ? { end: range.end } : {}),
+    });
+
+    range?.signal?.addEventListener(
+      'abort',
+      () => stream.destroy(Object.assign(new Error(`Aborted: ${path}`), { name: 'AbortError' })),
+      { once: true },
+    );
+
+    return Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+  }
+
+  /**
+   * A streamed write whose `close()` means the bytes are on the server.
+   *
+   * The handle is opened here rather than by `createWriteStream`, and passed in
+   * with `autoClose: false`, so this class controls the end of the transfer:
+   * finish the stream, `fsync` where the server offers it, then close the
+   * handle. Each step's failure rejects `close()`.
+   *
+   * `onProgress` is not reported and cannot be: the caller is the one feeding
+   * the stream, so it already knows how many bytes it has handed over.
+   */
+  async openWriteStream(
+    path: string,
+    flags: SftpWriteFlags,
+    signal?: AbortSignal,
+  ): Promise<WritableStream<Uint8Array>> {
+    const handle = await this.#open(path, flags, signal);
+    const stream: Writable = this.#sftp.createWriteStream(path, { handle, autoClose: false });
+
+    return new WritableStream<Uint8Array>({
+      write: async (chunk) => {
+        await new Promise<void>((resolve, reject) => {
+          stream.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength), (error) =>
+            error === undefined || error === null ? resolve() : reject(error),
+          );
+        });
+      },
+      close: async () => {
+        await new Promise<void>((resolve, reject) => {
+          stream.once('error', reject);
+          stream.end(() => resolve());
+        });
+        await this.#flush(handle, signal);
+        await this.#closeHandle(handle);
+      },
+      abort: async () => {
+        stream.destroy();
+        await this.#closeHandle(handle).catch(() => undefined);
+      },
+    });
+  }
+
+  async #open(path: string, flags: SftpWriteFlags | 'r', signal?: AbortSignal): Promise<Buffer> {
+    return this.#request<Buffer>(signal, (cb) => this.#sftp.open(path, flags, cb));
+  }
+
+  /** `fsync@openssh.com` where the server has it, and nothing where it does not. */
+  async #flush(handle: Buffer, signal?: AbortSignal): Promise<void> {
+    if (!this.extensions.fsync) return;
+    await this.#request<void>(signal, (cb) => this.#sftp.ext_openssh_fsync(handle, cb));
+  }
+
+  /**
+   * Closes a handle without a signal, deliberately: a close skipped because the
+   * caller aborted would leak the handle for the life of the connection, and the
+   * server has already done the work.
+   */
+  async #closeHandle(handle: Buffer): Promise<void> {
+    await new Promise<void>((resolve, reject) => {
+      this.#sftp.close(handle, (error) =>
+        error === undefined || error === null ? resolve() : reject(error),
+      );
+    });
   }
 
   #markDead(error?: Error): void {
