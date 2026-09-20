@@ -14,6 +14,18 @@ export class ProviderRegistry {
   readonly #byId = new Map<ProviderId, ProviderDefinition>();
   readonly #byScheme = new Map<string, ProviderDefinition>();
 
+  /**
+   * Takes ownership of `definition`: it is frozen in place, along with its
+   * `schemes` array, and stays frozen after the returned Disposable runs.
+   *
+   * So a caller adapting an already-registered definition — swapping `create`
+   * to inject a fixed instance or fixed credentials, as the test helpers and
+   * the live suite both do — must spread it into a fresh object
+   * (`{ ...existing, id, create }`) rather than edit it. Assigning to a
+   * property of a registered definition fails silently outside strict mode
+   * and throws inside it. This matters beyond this repo now that the host
+   * publishes the registry to co-resident extensions.
+   */
   register(definition: ProviderDefinition): Disposable {
     if (this.#byId.has(definition.id)) {
       throw new OmniFsError({
