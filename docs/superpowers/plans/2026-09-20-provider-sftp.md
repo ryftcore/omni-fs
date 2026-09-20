@@ -845,7 +845,7 @@ Create `packages/provider-sftp/src/known-hosts.ts`:
 
 ```ts
 import { createHash, createHmac } from 'node:crypto';
-import { expandHome, readLocalFile } from './local-files.js';
+import { readLocalFile } from './local-files.js';
 
 export type HostKeyVerdict = 'match' | 'mismatch' | 'unknown';
 
@@ -880,12 +880,17 @@ export function parseKnownHosts(text: string): readonly KnownHostEntry[] {
     const fields = line.split(/\s+/);
     let revoked = false;
     let certAuthority = false;
+    let unrecognisedMarker = false;
     while (fields[0]?.startsWith('@') === true) {
-      const marker = fields.shift();
+      const marker = fields.shift()?.toLowerCase();
       if (marker === '@revoked') revoked = true;
-      if (marker === '@cert-authority') certAuthority = true;
+      else if (marker === '@cert-authority') certAuthority = true;
+      else unrecognisedMarker = true;
     }
-    if (certAuthority) continue;
+    // A marker we do not understand makes the whole line unusable, which is
+    // what OpenSSH does with it. Stripping it and trusting the rest is how a
+    // misspelled revocation — `@Revoked` — becomes a trusted key.
+    if (certAuthority || unrecognisedMarker) continue;
 
     const [hosts, , keyBase64] = fields;
     if (hosts === undefined || keyBase64 === undefined || keyBase64 === '') continue;
@@ -921,8 +926,16 @@ export function verifyHostKey(
   const offeredType = keyType(key);
   const matching = entries.filter((entry) => matchesHost(entry, host, port));
 
+  // Revocation wins whatever order the file lists things in. `ssh-keygen -R`
+  // removes the old line, but appending `@revoked` by hand and leaving the
+  // stale line above it is just as common — and OpenSSH refuses the key either
+  // way. Deciding this inside the match loop would let line order matter.
+  if (matching.some((entry) => entry.revoked && entry.keyBase64 === offered)) {
+    return 'mismatch';
+  }
+
   for (const entry of matching) {
-    if (entry.keyBase64 === offered) return entry.revoked ? 'mismatch' : 'match';
+    if (entry.keyBase64 === offered) return 'match';
   }
   for (const entry of matching) {
     if (keyType(Buffer.from(entry.keyBase64, 'base64')) === offeredType) return 'mismatch';
@@ -940,12 +953,16 @@ export function fingerprint(key: Buffer): string {
  * that is absent or unreadable is no entries, which means every host is unseen.
  */
 export async function readKnownHosts(path: string | undefined): Promise<readonly KnownHostEntry[]> {
+  // The `try` covers the read and nothing else: a throw from `parseKnownHosts`
+  // swallowed here would read as "no known hosts" and silently downgrade
+  // verification to trust-on-first-use.
+  let text: string;
   try {
-    const file = await readLocalFile(expandHome(path ?? '~/.ssh/known_hosts'));
-    return parseKnownHosts(file.toString('utf8'));
+    text = (await readLocalFile(path ?? '~/.ssh/known_hosts')).toString('utf8');
   } catch {
     return [];
   }
+  return parseKnownHosts(text);
 }
 
 /**
@@ -993,7 +1010,12 @@ function keyType(key: Buffer): string {
 - [ ] **Step 7: Run both test files**
 
 Run: `pnpm --filter @omni-fs/provider-sftp exec vitest run src/known-hosts.test.ts src/local-files.test.ts`
-Expected: PASS, 18 tests (12 known-hosts, 6 local-files).
+Expected: PASS, 24 tests (18 known-hosts, 6 local-files).
+
+The known-hosts file must also pin what the two security fixes above buy: a plain line followed by a
+`@revoked` line for the same key (and the reverse order) is `mismatch`, `@Revoked` with a capital R
+is `mismatch`, an unrecognised marker such as `@bogus` drops its line entirely so the verdict is
+`unknown`, and `readKnownHosts` answers a real temp file with its entry and a missing path with `[]`.
 
 - [ ] **Step 8: Commit**
 
