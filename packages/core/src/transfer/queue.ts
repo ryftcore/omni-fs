@@ -57,6 +57,10 @@ export class TransferQueue implements Disposable {
   /** Set once at wiring time by the host. */
   setExecutor(executor: TransferExecutor): void {
     this.#executor = executor;
+    // `#pump` gives up when there is no executor, so anything enqueued during
+    // startup is parked. Without this it stays parked until some unrelated
+    // transfer happens to be added.
+    this.#pump();
   }
 
   /** Applies a provider's declared `maxConcurrency` to one connection. */
