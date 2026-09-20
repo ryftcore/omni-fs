@@ -20,7 +20,16 @@ const shared = {
   logLevel: 'info',
 };
 
-/** The extension host: CommonJS, Node, `vscode` provided at runtime. */
+/**
+ * The extension host: CommonJS, Node, `vscode` provided at runtime.
+ *
+ * `cpu-features` is external because it is never built: `pnpm-workspace.yaml`
+ * denies its install script, so the `.node` binary it requires does not exist
+ * and esbuild cannot follow the import. `ssh2` asks for it inside a `try` and
+ * falls back to its pure-JS crypto, so an unresolved require at runtime is the
+ * outcome that was already chosen — bundling must not turn it into a build
+ * failure.
+ */
 /** @type {import('esbuild').BuildOptions} */
 const extension = {
   ...shared,
@@ -29,7 +38,7 @@ const extension = {
   platform: 'node',
   format: 'cjs',
   target: 'node22',
-  external: ['vscode'],
+  external: ['vscode', 'cpu-features'],
 };
 
 /**
