@@ -28,6 +28,7 @@ import type {
 } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import { readSettings, type S3Settings } from './settings.js';
+import { openUploadStream } from './upload-stream.js';
 
 /**
  * S3 and anything that speaks its API: MinIO, Cloudflare R2, Backblaze B2,
@@ -280,17 +281,7 @@ export class S3FileSystem implements RemoteFileSystem {
 
     options?.signal?.addEventListener('abort', () => void upload.abort(), { once: true });
 
-    // Start the upload now, but keep its rejection handled so a failure while
-    // the caller is still writing does not become an unhandled rejection. The
-    // real error surfaces when `pipeTo`'s sink closes.
-    void upload.done().catch((error: unknown) => {
-      this.#logger.log('error', 'Multipart upload failed', {
-        path: path.value,
-        error: toOmniFsError(error, path.value).message,
-      });
-    });
-
-    return writable;
+    return openUploadStream(upload, writable, path.value);
   }
 
   async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
