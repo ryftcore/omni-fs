@@ -144,7 +144,7 @@ jobs:
       - run: pnpm package:vsix
 
       # Readiness is the suite's job, not a compose flag: it retries the first
-      # write for 60s, so starting the tests a second after `up` is fine.
+      # write for up to 60s, so starting the tests a second after `up` is fine.
       - run: docker compose up -d
 
       - run: xvfb-run -a pnpm test:extension:live
