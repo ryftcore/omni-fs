@@ -2,6 +2,16 @@ packages:
   - packages/*
   - apps/*
 
+# `pnpm audit --audit-level moderate` is a required check, and mocha 11 reaches
+# serialize-javascript 6, which carries GHSA-5c6j-r48x-rmvq (high) and
+# GHSA-qj8w-gfj5-8c6v (moderate). mocha fixed both by moving to ^7.1.1 in
+# mocha 12 — which we cannot take, because @vscode/test-cli 0.0.15 (the latest)
+# depends on mocha ^11.7.6. This pulls that one dependency forward to the
+# version mocha 12 already uses, and nothing else. Drop it when test-cli
+# supports mocha 12.
+overrides:
+  serialize-javascript: ^7.1.1
+
 # Explicit allowlist so a fresh `pnpm install` is non-interactive for
 # contributors. esbuild backs vitest; ssh2's install script is a native speedup
 # for the SFTP provider; unrs-resolver backs eslint-plugin-import-x.
