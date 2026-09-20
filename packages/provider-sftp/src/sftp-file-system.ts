@@ -53,11 +53,12 @@ export class SftpFileSystem implements RemoteFileSystem {
    * Static until connected, then truthful about this server.
    *
    * `copy-data` is announced per connection, so the honest answer for
-   * `canCopyServerSide` does not exist before the handshake. `copy()` is defined
-   * either way and throws `Unsupported` when the extension is absent;
-   * `ManagedFileSystem.copy` checks the method *and* this flag before using it
-   * (`packages/core/src/fs/managed-file-system.ts:204`), so on a server without
-   * the extension core streams the copy exactly as it does today.
+   * `canCopyServerSide` does not exist before the handshake: the static set
+   * says no, and this getter says what the connected server actually offers.
+   * `ManagedFileSystem.copy` reads the flag at call time
+   * (`packages/core/src/fs/managed-file-system.ts:204`), so both answers are
+   * correct in turn and core streams the copy on a server without the
+   * extension, exactly as it does today.
    */
   get capabilities(): ProviderCapabilities {
     const session = this.#session;
@@ -118,7 +119,14 @@ export class SftpFileSystem implements RemoteFileSystem {
       // the two agreeing, and a path that genuinely is not there fails both.
       try {
         return toFileStat(await session.lstat(remote, signal));
-      } catch {
+      } catch (retry) {
+        // A retry that failed because the connection went away says nothing
+        // about whether the path exists, and the original `NotFound` must not
+        // be reported for it: in the VS Code host `FileNotFound` is what drives
+        // create-on-save, so a dropped socket would be read as an invitation to
+        // write the file.
+        const retryError = toOmniFsError(retry, path.value);
+        if (isConnectionFailure(retryError)) throw retryError;
         throw translated;
       }
     }
@@ -130,8 +138,8 @@ export class SftpFileSystem implements RemoteFileSystem {
    * a directory opens as a directory and a link to a file opens in the editor —
    * which is how the same file already behaves over S3 and WebDAV. The
    * follow-ups run `maxConcurrency` at a time and are only paid on directories
-   * that contain links. A link whose target is gone, or that we may not follow,
-   * stays a symlink.
+   * that contain links. A link that cannot be followed stays a symlink; only a
+   * failure of the connection itself stops the listing.
    */
   async *list(path: RemotePath, signal?: AbortSignal): AsyncIterable<DirEntry> {
     const session = this.#requireSession();
@@ -154,9 +162,12 @@ export class SftpFileSystem implements RemoteFileSystem {
             );
           } catch (error) {
             const translated = toOmniFsError(error, target.value);
-            if (translated.code !== 'NotFound' && translated.code !== 'PermissionDenied') {
-              throw translated;
-            }
+            // A link we cannot follow is still a link: fall back to its own
+            // attributes rather than failing the listing. Only a failure of the
+            // connection itself propagates, because then the rest of the
+            // listing is unreliable too. A symlink loop arrives here as
+            // `Unknown`, since OpenSSH answers status 4 for it.
+            if (isConnectionFailure(translated)) throw translated;
           }
         }),
       );
@@ -222,6 +233,20 @@ export class SftpFileSystem implements RemoteFileSystem {
       throw toOmniFsError(error, path.value);
     }
   }
+}
+
+/**
+ * Whether a failure is the connection's rather than the path's.
+ *
+ * These three codes say nothing about the resource that was asked for, so they
+ * must never be tolerated in place of an answer about it: whatever the caller
+ * would have concluded from a soft failure is unreliable once the connection is
+ * the thing that broke.
+ */
+function isConnectionFailure(error: OmniFsError): boolean {
+  return (
+    error.code === 'ConnectionFailed' || error.code === 'Cancelled' || error.code === 'Timeout'
+  );
 }
 
 export const SFTP_CAPABILITIES: ProviderCapabilities = {

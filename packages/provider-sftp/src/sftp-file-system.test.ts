@@ -239,6 +239,25 @@ describe('SftpFileSystem stat', () => {
 
     expect((await fs.stat(RemotePath.parse('/broken'))).type).toBe('symlink');
   });
+
+  it('does not report a connection that dropped mid-fallback as absent', async () => {
+    // `NotFound` is what drives create-on-save in the VS Code host, so a lost
+    // socket must not be answered with it.
+    const { fs } = await connected(
+      fakeSession({
+        stat: async () => {
+          throw notFound();
+        },
+        lstat: async () => {
+          throw Object.assign(new Error('Connection lost'), { code: 7 });
+        },
+      }),
+    );
+
+    await expect(fs.stat(RemotePath.parse('/a.txt'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'ConnectionFailed',
+    );
+  });
 });
 
 describe('SftpFileSystem list', () => {
@@ -294,5 +313,44 @@ describe('SftpFileSystem list', () => {
 
     const entries = await collect(fs.list(RemotePath.parse('/releases')));
     expect(entries[0]).toMatchObject({ name: 'broken', type: 'symlink' });
+  });
+
+  it('keeps listing when a link cannot be followed at all', async () => {
+    // Status 4 is what OpenSSH answers for a symlink loop, and it translates to
+    // `Unknown` — the everyday case that must not cost the whole directory.
+    const { fs } = await connected(
+      fakeSession({
+        readdir: async () => [
+          { filename: 'loop', attrs: link() },
+          { filename: 'a.txt', attrs: file() },
+        ],
+        stat: async () => {
+          throw Object.assign(new Error('Failure'), { code: 4 });
+        },
+      }),
+    );
+
+    const entries = await collect(fs.list(RemotePath.parse('/releases')));
+    expect(entries.map((entry) => entry.name)).toEqual(['loop', 'a.txt']);
+    expect(entries[0]).toMatchObject({ name: 'loop', type: 'symlink' });
+  });
+
+  it('gives up on the listing when the follow-up is cancelled', async () => {
+    const { fs } = await connected(
+      fakeSession({
+        readdir: async () => [{ filename: 'current', attrs: link() }],
+        stat: async () => {
+          throw new OmniFsError({
+            code: 'Cancelled',
+            message: 'Cancelled: SFTP request',
+            providerId: 'sftp',
+          });
+        },
+      }),
+    );
+
+    await expect(collect(fs.list(RemotePath.parse('/releases')))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled',
+    );
   });
 });

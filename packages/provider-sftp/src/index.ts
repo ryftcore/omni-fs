@@ -3,9 +3,10 @@ import { SFTP_CAPABILITIES, SftpFileSystem } from './sftp-file-system.js';
 import { SFTP_SECRET_SCHEMA, SFTP_SETTINGS_SCHEMA } from './settings.js';
 
 /**
- * The whole public surface of this package: one definition object. A host adds
- * SFTP support with `registry.register(sftpProvider)` and learns nothing about
- * SSH or the `ssh2` client in the process.
+ * What a host needs from this package: one definition object. Adding SFTP
+ * support is `registry.register(sftpProvider)`, and it teaches the host nothing
+ * about SSH or the `ssh2` client. The re-exports below expose the pieces it is
+ * built from, for callers that construct or inspect them directly.
  */
 export const sftpProvider: ProviderDefinition = {
   id: 'sftp',
