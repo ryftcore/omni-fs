@@ -120,6 +120,11 @@ suite('the bundle under test', () => {
     // the .vsix, so while it was cacheable a replay restored the artifact,
     // skipped the script, and left whatever dev bundle `build` wrote last —
     // observed, not hypothetical, and invisible without this test.
+    // Both halves are properties of the *production* esbuild flags, not of
+    // the code: `SftpFileSystem` is absent only because `--minify` renames it,
+    // and the sourcemap comment only because `--production` turns sourcemaps
+    // off. Switching on `keepNames` would fail this assertion over a perfectly
+    // correct bundle — check `esbuild.mjs` before bisecting the extension.
     const bundle = await readFile(extensionPath('out', 'extension.js'), 'utf8');
     assert.ok(
       !bundle.includes('SftpFileSystem') && !bundle.includes('//# sourceMappingURL'),
