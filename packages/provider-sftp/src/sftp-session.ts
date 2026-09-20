@@ -87,22 +87,33 @@ export class SftpSession implements SftpRequests {
       const knownHosts = await readKnownHosts(settings.knownHostsPath);
       const auth = await buildAuth(settings, secret);
       const client = new Client();
+      // Initialised explicitly so `prefer-const` sees the assignment below as a
+      // reassignment. `const` at that assignment is not an option: the
+      // listeners registered here close over `session` before it exists, and a
+      // `const` declared later would make them throw a TDZ `ReferenceError`
+      // from inside the very handler that exists to keep an `error` event from
+      // being fatal.
+      let session: SftpSession | undefined = undefined;
       let refusal: OmniFsError | undefined;
+
+      // Registered before `connect` and never removed. A connection that drops
+      // emits `error` on the client, and an `error` event with no listener is
+      // fatal to the host process — in VS Code, the whole extension host. The
+      // temporary listener inside the promise below is what rejects the connect;
+      // this one exists so there is no instant where nothing is listening, and
+      // it is also how `isAlive` learns to stop claiming the session is usable.
+      client.on('error', (error: Error) => {
+        if (session !== undefined) session.#markDead(error);
+      });
+      client.on('close', () => {
+        if (session !== undefined) session.#markDead();
+      });
 
       const config: ConnectConfig = {
         host: settings.host,
         port: settings.port,
         username: settings.username,
-        // `ConnectConfig` declares its credential fields as exact optionals
-        // (`password?: string`), so each one is spread only when `buildAuth`
-        // produced it. Spreading `auth` whole would offer `string | undefined`
-        // where the library asks for `string`, which
-        // `exactOptionalPropertyTypes` rejects. Same shape as `provider-s3`'s
-        // client config.
-        ...(auth.password !== undefined ? { password: auth.password } : {}),
-        ...(auth.privateKey !== undefined ? { privateKey: auth.privateKey } : {}),
-        ...(auth.passphrase !== undefined ? { passphrase: auth.passphrase } : {}),
-        ...(auth.agent !== undefined ? { agent: auth.agent } : {}),
+        ...auth,
         hostVerifier: (key: Buffer): boolean => {
           const verdict = verifyHostKey(knownHosts, settings.host, settings.port, key);
           if (verdict === 'mismatch') {
@@ -149,14 +160,7 @@ export class SftpSession implements SftpRequests {
         client.sftp((error, channel) => (error ? reject(error) : resolve(channel)));
       });
 
-      const session = new SftpSession(sftp, detectExtensions(sftp), logger, client);
-
-      // A connection that drops later emits `error` on the client. Without a
-      // listener Node treats that as unhandled and takes the host process down,
-      // so this is load-bearing rather than defensive: it is also how `isAlive`
-      // learns to stop claiming the session is usable.
-      client.on('error', (error: Error) => session.#markDead(error));
-      client.on('close', () => session.#markDead());
+      session = new SftpSession(sftp, detectExtensions(sftp), logger, client);
 
       logger.log('info', 'SFTP session opened', {
         host: settings.host,
@@ -176,12 +180,13 @@ export class SftpSession implements SftpRequests {
 
   async close(): Promise<void> {
     const client = this.#client;
+    const wasAlive = this.#alive;
+    this.#alive = false;
     if (client === undefined) return;
-    if (!this.#alive) {
+    if (!wasAlive) {
       client.end();
       return;
     }
-    this.#alive = false;
     await new Promise<void>((resolve) => {
       client.once('close', () => resolve());
       client.end();

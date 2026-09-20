@@ -2,12 +2,22 @@ import { OmniFsError } from '@omni-fs/core';
 import { readLocalFile } from './local-files.js';
 import type { SftpSettings } from './settings.js';
 
-/** The credential half of an `ssh2` connect config. */
+/**
+ * The credential half of an `ssh2` connect config.
+ *
+ * These optionals deliberately omit the `| undefined` the rest of the repo
+ * writes on an optional property. This type exists to be spread into `ssh2`'s
+ * `ConnectConfig`, whose own fields are exact-optional (`password?: string`),
+ * and `buildAuth` only ever omits a field it has no value for — it never
+ * assigns `undefined` to one. Saying `| undefined` here would claim a value
+ * this type never carries, and `exactOptionalPropertyTypes` would then reject
+ * the spread.
+ */
 export interface SftpAuth {
-  readonly password?: string | undefined;
-  readonly privateKey?: Buffer | undefined;
-  readonly passphrase?: string | undefined;
-  readonly agent?: string | undefined;
+  readonly password?: string;
+  readonly privateKey?: Buffer;
+  readonly passphrase?: string;
+  readonly agent?: string;
 }
 
 export interface AuthSources {

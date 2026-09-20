@@ -91,6 +91,18 @@ describe('SftpSession requests', () => {
   });
 });
 
+describe('SftpSession lifecycle', () => {
+  it('reports a fresh session as usable', () => {
+    expect(session({}).isAlive()).toBe(true);
+  });
+
+  it('stops claiming to be usable once it is closed', async () => {
+    const fs = session({});
+    await fs.close();
+    expect(fs.isAlive()).toBe(false);
+  });
+});
+
 describe('detectExtensions', () => {
   it('reads what the server announced at version exchange', () => {
     const sftp = channel({
