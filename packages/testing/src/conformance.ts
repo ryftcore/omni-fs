@@ -70,6 +70,34 @@ export function runConformanceSuite(harness: ConformanceHarness): void {
       });
     });
 
+    it('has the bytes on the server once a write stream closes', async () => {
+      await withFs(async (fs, root) => {
+        if (!fs.capabilities.canWrite || fs.createWriteStream === undefined) return;
+
+        const path = root.join('streamed.txt');
+        const stream = await fs.createWriteStream(path);
+        const writer = stream.getWriter();
+        await writer.write(new TextEncoder().encode('first-'));
+        await writer.write(new TextEncoder().encode('second'));
+        await writer.close();
+
+        // `close()` is the only promise the caller has to believe: after it
+        // resolves, the whole body must be on the server, in order, and
+        // `stat()` must agree. That catches a stream that drops or reorders
+        // chunks, and one that reports a size it has not written.
+        //
+        // It does NOT catch the nastier version — `close()` resolving for a
+        // transfer the server went on to *reject* — because that needs a
+        // server that refuses on demand, which is not portable. Measured: with
+        // the fix removed from the WebDAV provider, this case still passed
+        // against the live server while that provider's own rejection test
+        // failed. Each provider owns that test; see `openWriteStream` in
+        // provider-webdav and `openUploadStream` in provider-s3.
+        expect(new TextDecoder().decode(await fs.readFile(path))).toBe('first-second');
+        expect((await fs.stat(path)).size).toBe('first-second'.length);
+      });
+    });
+
     it('lists a written file as a child of its directory', async () => {
       await withFs(async (fs, root) => {
         if (!fs.capabilities.canWrite) return;
