@@ -56,6 +56,11 @@ jobs:
   extension-tests:
     name: extension tests (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # Everything inside is bounded — Mocha's own timeout fails a wedged test —
+    # but nothing bounds a hung editor download or an Electron host that never
+    # exits, and the default is six hours of runner time. A cold cache on
+    # Windows is the slow case at a few minutes; twenty leaves room for it.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -113,6 +118,10 @@ jobs:
   extension-tests-live:
     name: extension tests (live)
     runs-on: ubuntu-latest
+    # Same reasoning as the job above, and here `docker compose up -d` and
+    # `package:vsix` are two more steps with no bound of their own. The job
+    # really takes about two minutes.
+    timeout-minutes: 15
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
