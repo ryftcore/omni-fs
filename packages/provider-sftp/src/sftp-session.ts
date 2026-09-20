@@ -29,7 +29,7 @@ export interface SftpExtensions {
   readonly copyData: boolean;
 }
 
-/** The request-shaped half of the transport. Task 6 adds the streaming half. */
+/** The request-shaped half of the transport; the streaming half is `SftpApi` below. */
 export interface SftpRequests {
   readonly extensions: SftpExtensions;
   stat(path: string, signal?: AbortSignal): Promise<SftpAttrs>;
@@ -345,19 +345,37 @@ export class SftpSession implements SftpConnection {
     }
 
     const source = await this.#open(from, 'r', signal);
+    let target: Buffer | undefined;
+    let failure: unknown;
+
     try {
-      const target = await this.#open(to, flags, signal);
-      try {
-        await this.#request<void>(signal, (cb) =>
-          this.#sftp.ext_copy_data(source, 0, 0, target, 0, cb),
-        );
-        await this.#flush(target, signal);
-      } finally {
-        await this.#closeHandle(target);
-      }
-    } finally {
-      await this.#closeHandle(source);
+      // `destination` is a const so the `ext_copy_data` call below needs no cast.
+      const destination = await this.#open(to, flags, signal);
+      target = destination;
+      await this.#request<void>(signal, (cb) =>
+        this.#sftp.ext_copy_data(source, 0, 0, destination, 0, cb),
+      );
+      await this.#flush(destination, signal);
+    } catch (error) {
+      failure = error;
     }
+
+    // The first failure wins, for the reason `writeAll` gives: the copy is what
+    // the caller asked about, so a close that also fails must not overwrite it.
+    if (target !== undefined) {
+      try {
+        await this.#closeHandle(target);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    try {
+      await this.#closeHandle(source);
+    } catch (error) {
+      failure ??= error;
+    }
+
+    if (failure !== undefined) throw failure;
   }
 
   /**
@@ -415,7 +433,12 @@ export class SftpSession implements SftpConnection {
       close: async () => {
         await new Promise<void>((resolve, reject) => {
           stream.once('error', reject);
-          stream.end(() => resolve());
+          stream.end(() => {
+            // Removed on the way out so the finished stream is not left holding
+            // a handler that would reject an already-settled promise.
+            stream.removeListener('error', reject);
+            resolve();
+          });
         });
         await this.#flush(handle, signal);
         await this.#closeHandle(handle);

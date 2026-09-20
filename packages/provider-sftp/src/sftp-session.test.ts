@@ -215,6 +215,30 @@ describe('SftpSession writes', () => {
     expect(log.closed).toBe(2);
   });
 
+  it('reports the copy failure, not the close failure, when the close fails too', async () => {
+    const copyFailure = Object.assign(new Error('Quota exceeded'), { code: 4 });
+    let closes = 0;
+    const { channel } = writeChannel({
+      ext_copy_data: (
+        _src: Buffer,
+        _srcOffset: number,
+        _len: number,
+        _dst: Buffer,
+        _dstOffset: number,
+        cb: Reply,
+      ) => cb(copyFailure),
+      close: (_h: Buffer, cb: Reply) => {
+        closes += 1;
+        cb(new Error('Stale handle'));
+      },
+    });
+    const fs = session(channel, { posixRename: false, fsync: false, copyData: true });
+
+    await expect(fs.copyData('/data/from.txt', '/data/to.txt', 'w')).rejects.toBe(copyFailure);
+    // Both handles are still released, even though releasing them failed too.
+    expect(closes).toBe(2);
+  });
+
   it('holds the write stream open until the bytes are flushed and the handle is closed', async () => {
     const sink = new PassThrough();
     const chunks: Buffer[] = [];
