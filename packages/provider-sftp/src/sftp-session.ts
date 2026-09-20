@@ -411,6 +411,11 @@ export class SftpSession implements SftpConnection {
    * finish the stream, `fsync` where the server offers it, then close the
    * handle. Each step's failure rejects `close()`.
    *
+   * The handle is also given back on every path — a failed write and a failed
+   * flush as much as a clean finish — because there is no second chance to do
+   * it later, and a handle this class keeps is leaked for the life of the
+   * connection.
+   *
    * `onProgress` is not reported and cannot be: the caller is the one feeding
    * the stream, so it already knows how many bytes it has handed over.
    */
@@ -422,30 +427,72 @@ export class SftpSession implements SftpConnection {
     const handle = await this.#open(path, flags, signal);
     const stream: Writable = this.#sftp.createWriteStream(path, { handle, autoClose: false });
 
+    // Attached before any byte moves, and never removed. Node hands a write
+    // failure to the per-chunk callback and *then* emits `error`; an `error`
+    // with no listener is an uncaught exception, which in the VS Code host
+    // takes the extension host down. Latching it also lets `close()` see a
+    // failure that arrived between chunks.
+    let failure: Error | undefined;
+    stream.on('error', (error: Error) => {
+      failure ??= error;
+    });
+
+    // The handle is this class's to give back, on every path. A `WritableStream`
+    // whose `write` or `close` rejects goes to `errored`, and aborting an errored
+    // stream never calls the sink's `abort` — so each terminal path releases it
+    // itself, and the guard makes the double release harmless.
+    let released = false;
+    const release = async (): Promise<void> => {
+      if (released) return;
+      released = true;
+      await this.#closeHandle(handle);
+    };
+
     return new WritableStream<Uint8Array>({
       write: async (chunk) => {
-        await new Promise<void>((resolve, reject) => {
-          stream.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength), (error) =>
-            error === undefined || error === null ? resolve() : reject(error),
-          );
-        });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            stream.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength), (error) =>
+              error === undefined || error === null ? resolve() : reject(error),
+            );
+          });
+        } catch (error) {
+          // The write is what the caller asked about, so it wins over anything
+          // the release goes on to say.
+          await release().catch(() => undefined);
+          throw error;
+        }
       },
       close: async () => {
-        await new Promise<void>((resolve, reject) => {
-          stream.once('error', reject);
-          stream.end(() => {
-            // Removed on the way out so the finished stream is not left holding
-            // a handler that would reject an already-settled promise.
-            stream.removeListener('error', reject);
-            resolve();
+        let closeFailure: unknown;
+
+        try {
+          await new Promise<void>((resolve, reject) => {
+            // `end`'s callback carries the error of a write still in flight;
+            // ignoring it would drop that failure on the floor.
+            stream.end((error?: Error | null) =>
+              error === undefined || error === null ? resolve() : reject(error),
+            );
           });
-        });
-        await this.#flush(handle, signal);
-        await this.#closeHandle(handle);
+          // A failure latched between chunks never reached a caller, and must
+          // not let this `close()` claim the bytes landed.
+          if (failure !== undefined) throw failure;
+          await this.#flush(handle, signal);
+        } catch (error) {
+          closeFailure = error;
+        }
+
+        try {
+          await release();
+        } catch (error) {
+          closeFailure ??= error;
+        }
+
+        if (closeFailure !== undefined) throw closeFailure;
       },
       abort: async () => {
         stream.destroy();
-        await this.#closeHandle(handle).catch(() => undefined);
+        await release().catch(() => undefined);
       },
     });
   }

@@ -1,4 +1,4 @@
-import { PassThrough, Readable } from 'node:stream';
+import { PassThrough, Readable, Writable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 import { NOOP_LOGGER, OmniFsError } from '@omni-fs/core';
 import type { SFTPWrapper } from 'ssh2';
@@ -260,7 +260,7 @@ describe('SftpSession writes', () => {
   it('fails close() when the server rejects the flush, rather than claiming the write landed', async () => {
     const sink = new PassThrough();
     sink.resume();
-    const { channel } = writeChannel({
+    const { channel, log } = writeChannel({
       createWriteStream: () => sink,
       ext_openssh_fsync: (_h: Buffer, cb: Reply) => cb(new Error('Quota exceeded')),
     });
@@ -271,6 +271,52 @@ describe('SftpSession writes', () => {
     await writer.write(new TextEncoder().encode('bytes'));
 
     await expect(writer.close()).rejects.toThrow('Quota exceeded');
+    // A failed flush must still give the handle back; the connection outlives
+    // this transfer, so a skipped close leaks for its whole life.
+    expect(log.closed).toBe(1);
+  });
+
+  it('releases the handle when a streamed write fails, and hears the error event', async () => {
+    // Constructed with ssh2's own flags (`SFTP.js`: `autoDestroy: false`,
+    // `emitClose: false`), so the error semantics this exercises are the real
+    // ones: Node calls the per-chunk callback with the failure and *then* emits
+    // `error`, which is an uncaught exception if nothing is listening.
+    const sink = new Writable({
+      autoDestroy: false,
+      emitClose: false,
+      write(_chunk, _enc, cb) {
+        cb(new Error('Disk full'));
+      },
+    });
+    const { channel, log } = writeChannel({ createWriteStream: () => sink });
+    const fs = session(channel, { posixRename: false, fsync: true, copyData: false });
+
+    const stream = await fs.openWriteStream('/data/streamed.txt', 'w');
+    const writer = stream.getWriter();
+
+    await expect(writer.write(new TextEncoder().encode('bytes'))).rejects.toThrow('Disk full');
+    // A `WritableStream` whose `write` rejects is `errored`, and aborting an
+    // errored stream never calls the sink's `abort` — so there is no second
+    // chance to release the handle.
+    expect(log.closed).toBe(1);
+    expect(log.fsynced).toBe(0);
+  });
+
+  it('releases the handle when the writer aborts', async () => {
+    const sink = new PassThrough();
+    sink.resume();
+    const { channel, log } = writeChannel({ createWriteStream: () => sink });
+    const fs = session(channel, { posixRename: false, fsync: true, copyData: false });
+
+    const stream = await fs.openWriteStream('/data/streamed.txt', 'w');
+    const writer = stream.getWriter();
+    await writer.write(new TextEncoder().encode('partial'));
+    await writer.abort(new Error('User cancelled'));
+
+    expect(log.closed).toBe(1);
+    // An abandoned transfer is not flushed: the caller never asked for these
+    // bytes to be durable.
+    expect(log.fsynced).toBe(0);
   });
 
   it('passes an inclusive byte range to the read stream', async () => {
