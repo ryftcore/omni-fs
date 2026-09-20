@@ -1,4 +1,4 @@
-import { OmniFsError } from '@omni-fs/core';
+import { OmniFsError, trimSlashes, trimTrailingSlashes } from '@omni-fs/core';
 import type { SettingsSchema } from '@omni-fs/core';
 
 export const WEBDAV_SETTINGS_SCHEMA: SettingsSchema = {
@@ -72,10 +72,10 @@ export function readSettings(raw: Readonly<Record<string, unknown>>): WebdavSett
   }
 
   return {
-    baseUrl: baseUrl.replace(/\/+$/, ''),
+    baseUrl: trimTrailingSlashes(baseUrl),
     authType: authType as WebdavAuthType,
     username: readString(raw, 'username'),
-    rootPrefix: (readString(raw, 'rootPrefix') ?? '').replace(/^\/+|\/+$/g, ''),
+    rootPrefix: trimSlashes(readString(raw, 'rootPrefix') ?? ''),
   };
 }
 

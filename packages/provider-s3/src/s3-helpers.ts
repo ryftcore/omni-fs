@@ -47,11 +47,6 @@ export function copySource(bucket: string, key: string): string {
   return `${bucket}/${encodeURIComponent(key).replace(/%2F/g, '/')}`;
 }
 
-/** Strips leading and trailing slashes, leaving the separators between segments. */
-export function trimSlashes(value: string): string {
-  return value.replace(/^\/+|\/+$/g, '');
-}
-
 /**
  * The `Range` header for a read, or `'empty'` when the caller asked for no
  * bytes at all.

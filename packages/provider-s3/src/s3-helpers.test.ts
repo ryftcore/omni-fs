@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { RemotePath } from '@omni-fs/core';
-import { buildRange, copySource, keyFor, prefixFor, trimSlashes } from './s3-helpers.js';
+import { buildRange, copySource, keyFor, prefixFor } from './s3-helpers.js';
 import type { S3Settings } from './settings.js';
 
 /**
@@ -86,15 +86,6 @@ describe('copySource', () => {
     // Encoding these to %2F addresses one object whose name contains slashes,
     // which is not the same object at all.
     expect(copySource('b', 'a/b/c.txt')).toBe('b/a/b/c.txt');
-  });
-});
-
-describe('trimSlashes', () => {
-  it('removes leading and trailing slashes but not inner ones', () => {
-    expect(trimSlashes('/a/b/')).toBe('a/b');
-    expect(trimSlashes('///a///')).toBe('a');
-    expect(trimSlashes('a/b')).toBe('a/b');
-    expect(trimSlashes('')).toBe('');
   });
 });
 

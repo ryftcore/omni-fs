@@ -13,7 +13,7 @@ import {
   type StorageClass,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
-import { OmniFsError, collectStream, streamFrom } from '@omni-fs/core';
+import { OmniFsError, collectStream, streamFrom, trimSlashes } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -28,7 +28,7 @@ import type {
   RemotePath,
 } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
-import { buildRange, copySource, keyFor, prefixFor, trimSlashes } from './s3-helpers.js';
+import { buildRange, copySource, keyFor, prefixFor } from './s3-helpers.js';
 import { readSettings, type S3Settings } from './settings.js';
 import { openUploadStream, writeConditions } from './upload-stream.js';
 

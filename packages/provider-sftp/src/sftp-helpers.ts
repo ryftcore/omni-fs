@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from '@omni-fs/core';
 import type { FileStat, FileType, ReadOptions, RemotePath } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import type { SftpAttrs } from './sftp-session.js';
@@ -62,7 +63,7 @@ export function joinRemote(base: string, path: RemotePath): string {
 }
 
 function normalise(value: string): string {
-  const collapsed = `/${value}`.replace(/\/+/g, '/').replace(/\/+$/, '');
+  const collapsed = trimTrailingSlashes(`/${value}`.replace(/\/+/g, '/'));
   return collapsed === '' ? '/' : collapsed;
 }
 

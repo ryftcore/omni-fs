@@ -1,4 +1,4 @@
-import { OmniFsError } from '@omni-fs/core';
+import { OmniFsError, trimSlashes } from '@omni-fs/core';
 import type { SettingsSchema } from '@omni-fs/core';
 
 export interface S3Settings {
@@ -85,7 +85,7 @@ export function readSettings(raw: Readonly<Record<string, unknown>>): S3Settings
     region: readString(raw, 'region') ?? 'us-east-1',
     endpoint: readString(raw, 'endpoint'),
     forcePathStyle: raw['forcePathStyle'] === true,
-    rootPrefix: (readString(raw, 'rootPrefix') ?? '').replace(/^\/+|\/+$/g, ''),
+    rootPrefix: trimSlashes(readString(raw, 'rootPrefix') ?? ''),
     storageClass: readString(raw, 'storageClass'),
     serverSideEncryption: readString(raw, 'serverSideEncryption'),
   };
