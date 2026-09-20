@@ -12,7 +12,7 @@ import {
   type StorageClass,
 } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
-import { OmniFsError, collectStream } from '@omni-fs/core';
+import { OmniFsError, collectStream, streamFrom } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -203,6 +203,22 @@ export class S3FileSystem implements RemoteFileSystem {
     options?: ReadOptions,
   ): Promise<ReadableStream<Uint8Array>> {
     const range = buildRange(options);
+
+    // A read of zero bytes has no Range spelling, so it is answered here rather
+    // than sent as the inverted `bytes=5--1` the arithmetic alone produces —
+    // which S3 answers with 416, or ignores, returning the whole object to a
+    // caller that wanted nothing. The `stat` is not a formality: without it a
+    // zero-length read of a missing path, or one through an already-aborted
+    // signal, would succeed emptily, where `MemoryFileSystem` — the contract's
+    // reference — raises `NotFound` and `Cancelled` first. It settles only
+    // those two: the `type` it also returns is not inspected, so a zero-length
+    // read of a prefix still answers with no bytes where the reference raises
+    // `IsADirectory`. `provider-webdav` carries the same gap, recorded there
+    // and not closed here.
+    if (range === 'empty') {
+      await this.stat(path, options?.signal);
+      return streamFrom(new Uint8Array(0));
+    }
 
     const response = await this.#run(
       (client) =>

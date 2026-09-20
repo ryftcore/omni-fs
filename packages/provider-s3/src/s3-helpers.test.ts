@@ -115,6 +115,20 @@ describe('buildRange', () => {
     expect(buildRange({ offset: 5, length: 10 })).toEqual({ header: 'bytes=5-14' });
   });
 
+  it('reports a zero-length read as empty rather than as an inverted range', () => {
+    // `bytes=0--1` is what the arithmetic produces unguarded. S3 answers an
+    // invalid range with 416, or ignores the header and sends the whole
+    // object back for a request that wanted nothing at all. There is no Range
+    // spelling for zero bytes, so the caller has to answer it without one —
+    // which is what `provider-webdav` and `provider-sftp` already do.
+    expect(buildRange({ offset: 0, length: 0 })).toBe('empty');
+    expect(buildRange({ offset: 5, length: 0 })).toBe('empty');
+  });
+
+  it('treats a negative length as empty too', () => {
+    expect(buildRange({ offset: 5, length: -1 })).toBe('empty');
+  });
+
   it('ignores a length given without an offset', () => {
     // Consistent with `MemoryFileSystem`, the contract's reference, which
     // returns the whole file when no offset was given.

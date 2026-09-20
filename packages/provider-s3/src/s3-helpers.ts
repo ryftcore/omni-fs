@@ -52,12 +52,26 @@ export function trimSlashes(value: string): string {
   return value.replace(/^\/+|\/+$/g, '');
 }
 
-/** The `Range` header for a read, or nothing when the caller gave no offset. */
+/**
+ * The `Range` header for a read, or `'empty'` when the caller asked for no
+ * bytes at all.
+ *
+ * `'empty'` exists because there is no Range spelling for zero bytes. The
+ * arithmetic alone produces `bytes=5--1`, which S3 answers with 416 or — worse
+ * — ignores, sending the whole object back to a caller that wanted nothing.
+ * The caller answers `'empty'` itself, and must still prove the object exists
+ * while doing so, or a zero-length read of a missing path succeeds emptily
+ * where `MemoryFileSystem`, the contract's reference, raises `NotFound`.
+ *
+ * A `length` with no `offset` is ignored, which is also what the reference
+ * does: no offset means the whole file.
+ */
 export function buildRange(
   options: ReadOptions | undefined,
-): { readonly header: string } | undefined {
+): { readonly header: string } | 'empty' | undefined {
   if (options?.offset === undefined) return undefined;
   const start = options.offset;
-  const end = options.length !== undefined ? start + options.length - 1 : undefined;
-  return { header: `bytes=${String(start)}-${end === undefined ? '' : String(end)}` };
+  if (options.length === undefined) return { header: `bytes=${String(start)}-` };
+  if (options.length <= 0) return 'empty';
+  return { header: `bytes=${String(start)}-${String(start + options.length - 1)}` };
 }
