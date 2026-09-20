@@ -152,7 +152,17 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
   ): WritableStream<Uint8Array> {
     const writer = stream.getWriter();
     return new WritableStream<Uint8Array>({
-      write: (chunk) => writer.write(chunk),
+      write: async (chunk) => {
+        try {
+          await writer.write(chunk);
+        } catch (error) {
+          // A stream that errors never calls its sink's `abort`, so this is the
+          // only place a failed write can clear the entry. Bytes may well have
+          // landed before it failed.
+          this.#afterMutation(path);
+          throw error;
+        }
+      },
       close: async () => {
         await writer.close();
         this.#afterMutation(path);
