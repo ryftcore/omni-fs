@@ -136,8 +136,32 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
     if (options?.createParents !== false) await this.#ensureParents(path, options?.signal);
 
     const stream = await this.#inner.createWriteStream(path, options);
-    this.#afterMutation(path);
-    return stream;
+    return this.#invalidateOnClose(stream, path);
+  }
+
+  /**
+   * Invalidation has to wait for the bytes to land. Dropping the cache entry
+   * when the stream *opens* leaves a window in which a stat — a tree refresh
+   * during an upload, say — re-caches the pre-write size, and nothing clears it
+   * again once the write finishes. Aborts invalidate too: a partial write is
+   * still a change.
+   */
+  #invalidateOnClose(
+    stream: WritableStream<Uint8Array>,
+    path: RemotePath,
+  ): WritableStream<Uint8Array> {
+    const writer = stream.getWriter();
+    return new WritableStream<Uint8Array>({
+      write: (chunk) => writer.write(chunk),
+      close: async () => {
+        await writer.close();
+        this.#afterMutation(path);
+      },
+      abort: async (reason) => {
+        await writer.abort(reason);
+        this.#afterMutation(path);
+      },
+    });
   }
 
   async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
