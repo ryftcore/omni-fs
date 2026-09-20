@@ -23,6 +23,19 @@ export class ProviderRegistry {
       });
     }
 
+    // Frozen because `get()` hands this object to anyone — including, once the
+    // host publishes the registry, a co-resident extension. `create` receives
+    // `getSecret`, so an in-place swap would be a credential leak, and
+    // `readonly` is compile-time only.
+    //
+    // This is hygiene, not a boundary: VS Code does not isolate extensions
+    // from one another. It closes the in-place swap and nothing more.
+    //
+    // `schemes` is frozen separately because `Object.freeze` is shallow and
+    // the Disposable below iterates that array at disposal time.
+    Object.freeze(definition.schemes);
+    Object.freeze(definition);
+
     this.#byId.set(definition.id, definition);
     for (const scheme of definition.schemes) this.#byScheme.set(scheme, definition);
 
