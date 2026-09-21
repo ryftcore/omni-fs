@@ -269,10 +269,27 @@ two processes cannot hand out the same one.
 The certificate is self-signed and generated at build, which makes
 `allowSelfSigned` a tested setting rather than a documented one.
 
-`require_ssl_reuse` stays at vsftpd's default `YES`. Real servers have it on,
-`basic-ftp` stores the control connection's TLS session and resumes it on data
-connections for precisely this reason, and proving that path is worth more than
-an easy green. See Risks for what happens if it does not hold.
+**`require_ssl_reuse` was decided `YES` and shipped `NO`.** The decision was
+that it should stay at vsftpd's default: real servers have it on, `basic-ftp`
+stores the control connection's TLS session and resumes it on data connections
+for precisely this reason, and proving that path is worth more than an easy
+green.
+
+What was observed is that it did not hold. With the default left in place,
+vsftpd refused `basic-ftp`'s own data connections with `522 SSL connection
+failed: session reuse required`. The client does pass the control connection's
+session when it opens a data socket (`dist/transfer.js`), so the intent is
+there, but the resumption did not take against this server and every FTPS
+transfer failed. Diagnosing vsftpd's side of that is not what this phase is
+for, so `docker/ftp/vsftpd-common.conf` sets `require_ssl_reuse=NO` and says
+why in place.
+
+The consequence is therefore stated rather than assumed away: **nothing that
+runs against this container exercises the session-reuse path.** Both FTPS
+listeners negotiate TLS for real, so decision 9's own claim — three modes
+tested rather than one — still holds; it is session reuse specifically that has
+no live coverage, and closing it would need either a second FTP image or a
+diagnosis of the 522.
 
 ### 10. CI runs the live conformance suite, for all four providers
 
@@ -633,8 +650,9 @@ Three configurations, one entrypoint:
 | `ssl_ciphers`  | default                             | default              | `DEFAULT@SECLEVEL=0` |
 | passive range  | 21000–21010                         | 21011–21021          | 21022–21032          |
 
-All three enable `write_enable`, keep `require_ssl_reuse` at its default, and
-set `pasv_address` for the published ports. None chroots the user: the login
+All three enable `write_enable`, turn `require_ssl_reuse` off (decision 9 —
+it was meant to stay on, and could not), and set `pasv_address` for the
+published ports. None chroots the user: the login
 directory is `/data` and the server's filesystem root stays reachable, which is
 what gives the absolute `rootPrefix` rule something real to name — the same
 reason `docker/sftp` does not chroot either. The entrypoint starts the implicit
