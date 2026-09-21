@@ -82,9 +82,14 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
 
   async stat(path: RemotePath, signal?: AbortSignal): Promise<FileStat> {
     const cached = this.#cache.getStat(this.#connectionId, path);
-    if (cached !== undefined) return this.#stampReadOnly(cached);
+    if (cached !== undefined) {
+      this.#logger.log('trace', 'stat', { path: path.value, cache: 'hit' });
+      return this.#stampReadOnly(cached);
+    }
 
-    const stat = await this.#inner.stat(path, signal);
+    const stat = await this.#timed('stat', { path: path.value, cache: 'miss' }, () =>
+      this.#inner.stat(path, signal),
+    );
     this.#cache.setStat(this.#connectionId, path, stat);
     return this.#stampReadOnly(stat);
   }
@@ -97,31 +102,64 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
   async *list(path: RemotePath, signal?: AbortSignal): AsyncIterable<DirEntry> {
     const cached = this.#cache.getListing(this.#connectionId, path);
     if (cached !== undefined) {
+      this.#logger.log('trace', 'list', {
+        path: path.value,
+        entries: cached.length,
+        cache: 'hit',
+      });
       yield* cached;
       return;
     }
 
+    // Timed by hand: `#timed` wraps a promise, and this is a generator. The
+    // clock includes the caller's own time between entries, which is small for
+    // every host today and would only mislead a very slow consumer.
+    const started = Date.now();
     const collected: DirEntry[] = [];
-    for await (const entry of this.#inner.list(path, signal)) {
-      collected.push(entry);
-      yield entry;
+    try {
+      for await (const entry of this.#inner.list(path, signal)) {
+        collected.push(entry);
+        yield entry;
+      }
+    } catch (error) {
+      this.#logger.log('debug', 'list failed', {
+        path: path.value,
+        ...describeFailure(error),
+        ms: Date.now() - started,
+      });
+      throw error;
     }
     this.#cache.setListing(this.#connectionId, path, collected);
+    this.#logger.log('debug', 'list', {
+      path: path.value,
+      entries: collected.length,
+      cache: 'miss',
+      ms: Date.now() - started,
+    });
   }
 
   readFile(path: RemotePath, options?: ReadOptions): Promise<Uint8Array> {
-    return this.#inner.readFile(path, options);
+    return this.#timed(
+      'read',
+      { path: path.value },
+      () => this.#inner.readFile(path, options),
+      (data) => ({ bytes: data.byteLength }),
+    );
   }
 
+  /** Timed to the stream opening, not to its end: the caller owns the rest. */
   createReadStream(path: RemotePath, options?: ReadOptions): Promise<ReadableStream<Uint8Array>> {
-    return this.#inner.createReadStream(path, options);
+    return this.#timed('open read stream', { path: path.value }, () =>
+      this.#inner.createReadStream(path, options),
+    );
   }
 
   async writeFile(path: RemotePath, data: Uint8Array, options?: WriteOptions): Promise<void> {
     this.#assertWritable('write');
-    if (options?.createParents !== false) await this.#ensureParents(path, options?.signal);
-
-    await this.#inner.writeFile(path, data, options);
+    await this.#timed('write', { path: path.value, bytes: data.byteLength }, async () => {
+      if (options?.createParents !== false) await this.#ensureParents(path, options?.signal);
+      await this.#inner.writeFile(path, data, options);
+    });
     this.#afterMutation(path);
   }
 
@@ -133,9 +171,11 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
     if (this.#inner.createWriteStream === undefined) {
       throw OmniFsError.unsupported('streaming writes');
     }
-    if (options?.createParents !== false) await this.#ensureParents(path, options?.signal);
-
-    const stream = await this.#inner.createWriteStream(path, options);
+    const createWriteStream = this.#inner.createWriteStream.bind(this.#inner);
+    const stream = await this.#timed('open write stream', { path: path.value }, async () => {
+      if (options?.createParents !== false) await this.#ensureParents(path, options?.signal);
+      return createWriteStream(path, options);
+    });
     return this.#invalidateOnClose(stream, path);
   }
 
@@ -177,11 +217,11 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
   async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
     this.#assertWritable('delete');
 
-    if (options?.recursive === true && !this.#inner.capabilities.canDeleteRecursive) {
-      await this.#deleteRecursiveByWalk(path, options);
-    } else {
-      await this.#inner.delete(path, options);
-    }
+    const recursive = options?.recursive === true;
+    const emulated = recursive && !this.#inner.capabilities.canDeleteRecursive;
+    await this.#timed('delete', { path: path.value, recursive, emulated }, () =>
+      emulated ? this.#deleteRecursiveByWalk(path, options) : this.#inner.delete(path, options),
+    );
 
     this.#cache.invalidateSubtree(this.#connectionId, path);
     this.#cache.invalidateChildren(this.#connectionId, path.parent);
@@ -204,24 +244,35 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
       throw OmniFsError.unsupported('creating directories');
     }
 
-    await this.#inner.createDirectory(path, signal);
+    const createDirectory = this.#inner.createDirectory.bind(this.#inner);
+    await this.#timed('mkdir', { path: path.value }, () => createDirectory(path, signal));
     this.#afterMutation(path);
   }
 
   async rename(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
     this.#assertWritable('rename');
 
-    if (this.#inner.rename !== undefined && this.#inner.capabilities.canRename) {
-      await this.#inner.rename(from, to, options);
-    } else {
-      // S3 and friends: emulate. Not atomic — if the delete fails the copy
-      // stays, which is the safe direction to fail in.
-      await this.copy(from, to, options);
-      await this.delete(from, {
-        recursive: true,
-        ...(options?.signal ? { signal: options.signal } : {}),
-      });
-    }
+    const native =
+      this.#inner.rename !== undefined && this.#inner.capabilities.canRename
+        ? this.#inner.rename.bind(this.#inner)
+        : undefined;
+    await this.#timed(
+      'rename',
+      { from: from.value, to: to.value, emulated: native === undefined },
+      async () => {
+        if (native !== undefined) {
+          await native(from, to, options);
+          return;
+        }
+        // S3 and friends: emulate. Not atomic — if the delete fails the copy
+        // stays, which is the safe direction to fail in.
+        await this.copy(from, to, options);
+        await this.delete(from, {
+          recursive: true,
+          ...(options?.signal ? { signal: options.signal } : {}),
+        });
+      },
+    );
 
     this.#cache.invalidateSubtree(this.#connectionId, from);
     this.#cache.invalidateChildren(this.#connectionId, from.parent);
@@ -235,11 +286,18 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
       throw OmniFsError.alreadyExists(to.value);
     }
 
-    if (this.#inner.copy !== undefined && this.#inner.capabilities.canCopyServerSide) {
-      await this.#inner.copy(from, to, options);
-    } else {
-      await this.#copyByStream(from, to, options);
-    }
+    const serverSide =
+      this.#inner.copy !== undefined && this.#inner.capabilities.canCopyServerSide
+        ? this.#inner.copy.bind(this.#inner)
+        : undefined;
+    await this.#timed(
+      'copy',
+      { from: from.value, to: to.value, serverSide: serverSide !== undefined },
+      () =>
+        serverSide !== undefined
+          ? serverSide(from, to, options)
+          : this.#copyByStream(from, to, options),
+    );
 
     this.#afterMutation(to);
   }
@@ -432,6 +490,38 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
     }
   }
 
+  /**
+   * One `debug` line per operation that reached the provider: what it was,
+   * how long it took, and — when it failed — the code a host switches on and
+   * whether a retry could help. Failures are rethrown untouched; this only
+   * watches. The level is `debug` for both outcomes on purpose: the host
+   * already reports a failure the user sees, and this line is its context.
+   */
+  async #timed<T>(
+    operation: string,
+    data: Record<string, unknown>,
+    body: () => Promise<T>,
+    describeResult?: (value: T) => Record<string, unknown>,
+  ): Promise<T> {
+    const started = Date.now();
+    try {
+      const value = await body();
+      this.#logger.log('debug', operation, {
+        ...data,
+        ...describeResult?.(value),
+        ms: Date.now() - started,
+      });
+      return value;
+    } catch (error) {
+      this.#logger.log('debug', `${operation} failed`, {
+        ...data,
+        ...describeFailure(error),
+        ms: Date.now() - started,
+      });
+      throw error;
+    }
+  }
+
   #afterMutation(path: RemotePath): void {
     this.#cache.invalidate(this.#connectionId, path);
     this.#cache.invalidateChildren(this.#connectionId, path.parent);
@@ -441,4 +531,10 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
     this.#cache.invalidateConnection(this.#connectionId);
     await this.#inner[Symbol.asyncDispose]();
   }
+}
+
+function describeFailure(error: unknown): Record<string, unknown> {
+  return OmniFsError.is(error)
+    ? { code: error.code, retryable: error.retryable }
+    : { error: error instanceof Error ? error.message : String(error) };
 }

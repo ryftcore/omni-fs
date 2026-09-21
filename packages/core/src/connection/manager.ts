@@ -44,6 +44,13 @@ export interface ProbeResult {
   readonly durationMs: number;
 }
 
+/**
+ * Why a connection closed. Logged, never branched on: from the outside every
+ * one of these looks like the same reconnect, and telling them apart is the
+ * whole reason the log line exists.
+ */
+export type DisconnectReason = 'user' | 'idle' | 'config-changed' | 'shutdown';
+
 /** Id given to a throwaway probe filesystem. Never stored, never looked up. */
 const PROBE_ID = '__probe__';
 
@@ -61,6 +68,8 @@ export class ConnectionManager implements AsyncDisposable {
   readonly #connecting = new Map<ConnectionId, Promise<RemoteFileSystem>>();
   readonly #states = new Map<ConnectionId, ConnectionState>();
   readonly #idleTimers = new Map<ConnectionId, ReturnType<typeof setTimeout>>();
+  /** Scoped per connection by `#connect`, so every line names who it is about. */
+  readonly #loggers = new Map<ConnectionId, Logger>();
   readonly #onDidChangeState = new Emitter<ConnectionStateChange>();
 
   readonly onDidChangeState = this.#onDidChangeState.event;
@@ -83,6 +92,9 @@ export class ConnectionManager implements AsyncDisposable {
     if (existing !== undefined && existing.isAlive()) {
       this.#touch(id);
       return existing;
+    }
+    if (existing !== undefined && !this.#connecting.has(id)) {
+      this.#loggerFor(id).log('info', 'Connection lost; reconnecting', { connectionId: id });
     }
 
     const pending = this.#connecting.get(id);
@@ -158,11 +170,13 @@ export class ConnectionManager implements AsyncDisposable {
     }
 
     this.#setState(id, { status: 'connecting' });
+    const started = Date.now();
+    const logger = this.#options.logger.child(`${config.providerId}:${config.label}`);
+    this.#loggers.set(id, logger);
 
     let fs: RemoteFileSystem;
     try {
       const definition = this.#options.registry.get(config.providerId);
-      const logger = this.#options.logger.child(`${config.providerId}:${config.label}`);
 
       fs = definition.create({
         config,
@@ -186,6 +200,7 @@ export class ConnectionManager implements AsyncDisposable {
       // session — a permanent spinner the user cannot tell from a slow server.
       const wrapped = OmniFsError.wrap(error, { providerId: config.providerId });
       this.#setState(id, { status: 'error', error: wrapped.message, at: Date.now() });
+      logConnectFailure(logger, id, wrapped, started);
       throw wrapped;
     }
 
@@ -194,6 +209,7 @@ export class ConnectionManager implements AsyncDisposable {
     } catch (error) {
       const wrapped = OmniFsError.wrap(error, { providerId: config.providerId });
       this.#setState(id, { status: 'error', error: wrapped.message, at: Date.now() });
+      logConnectFailure(logger, id, wrapped, started);
       // Release whatever the failed connect left open. A teardown failure here
       // must not mask the original connect error.
       try {
@@ -221,16 +237,22 @@ export class ConnectionManager implements AsyncDisposable {
 
     this.#live.set(id, fs);
     this.#setState(id, { status: 'connected', since: Date.now() });
+    logger.log('info', 'Connected', { connectionId: id, ms: Date.now() - started });
     this.#touch(id);
     return fs;
   }
 
-  /** Closes one connection. Safe to call when it is not open. */
-  async disconnect(id: ConnectionId): Promise<void> {
+  /**
+   * Closes one connection. Safe to call when it is not open. `reason` only
+   * reaches the log; a host calling this on the user's behalf leaves it alone.
+   */
+  async disconnect(id: ConnectionId, reason: DisconnectReason = 'user'): Promise<void> {
     this.#clearIdleTimer(id);
     const fs = this.#live.get(id);
     this.#live.delete(id);
     if (fs === undefined) return;
+
+    this.#loggerFor(id).log('info', 'Disconnected', { connectionId: id, reason });
 
     try {
       await fs[Symbol.asyncDispose]();
@@ -245,7 +267,7 @@ export class ConnectionManager implements AsyncDisposable {
 
   /** Call after editing a config so the next acquire uses the new settings. */
   async invalidate(config: ConnectionConfig): Promise<void> {
-    await this.disconnect(config.id);
+    await this.disconnect(config.id, 'config-changed');
   }
 
   #touch(id: ConnectionId): void {
@@ -254,7 +276,7 @@ export class ConnectionManager implements AsyncDisposable {
     if (idleTimeoutMs <= 0) return;
 
     const timer = setTimeout(() => {
-      void this.disconnect(id);
+      void this.disconnect(id, 'idle');
     }, idleTimeoutMs);
     // Do not hold the host process open just to expire an idle FTP socket.
     timer.unref?.();
@@ -269,13 +291,32 @@ export class ConnectionManager implements AsyncDisposable {
     }
   }
 
+  #loggerFor(id: ConnectionId): Logger {
+    return this.#loggers.get(id) ?? this.#options.logger;
+  }
+
   #setState(id: ConnectionId, state: ConnectionState): void {
     this.#states.set(id, state);
     this.#onDidChangeState.fire({ connectionId: id, state });
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    await Promise.all([...this.#live.keys()].map((id) => this.disconnect(id)));
+    await Promise.all([...this.#live.keys()].map((id) => this.disconnect(id, 'shutdown')));
     this.#onDidChangeState.dispose();
   }
+}
+
+function logConnectFailure(
+  logger: Logger,
+  id: ConnectionId,
+  error: OmniFsError,
+  started: number,
+): void {
+  logger.log('warn', 'Connect failed', {
+    connectionId: id,
+    code: error.code,
+    retryable: error.retryable,
+    message: error.message,
+    ms: Date.now() - started,
+  });
 }

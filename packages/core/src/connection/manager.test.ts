@@ -4,6 +4,7 @@ import { MINIMAL_CAPABILITIES } from '../capabilities.js';
 import { InMemoryConfigStore } from '../ports/config-store.js';
 import { InMemorySecretStore } from '../ports/secret-store.js';
 import { NOOP_LOGGER } from '../ports/logger.js';
+import type { Logger, LogLevel } from '../ports/logger.js';
 import { OmniFsError } from '../errors.js';
 import { ProviderRegistry } from '../registry.js';
 import type { ConnectionState } from '../model/connection.js';
@@ -82,9 +83,15 @@ interface Harness {
   readonly states: ConnectionState[];
 }
 
+interface LogEntry {
+  readonly level: LogLevel;
+  readonly message: string;
+  readonly data: Record<string, unknown> | undefined;
+}
+
 async function setup(
   behaviour: StubBehaviour = {},
-  options: { idleTimeoutMs?: number; providerId?: string } = {},
+  options: { idleTimeoutMs?: number; providerId?: string; logs?: LogEntry[] } = {},
 ): Promise<Harness> {
   const stub = stubProvider(behaviour);
   const registry = new ProviderRegistry();
@@ -105,7 +112,7 @@ async function setup(
     registry,
     configStore,
     secretStore,
-    logger: NOOP_LOGGER,
+    logger: options.logs === undefined ? NOOP_LOGGER : recordingLogger(options.logs),
     ...(options.idleTimeoutMs !== undefined ? { idleTimeoutMs: options.idleTimeoutMs } : {}),
   });
   manager.onDidChangeState((change) => {
@@ -113,6 +120,16 @@ async function setup(
   });
 
   return { manager, configStore, secretStore, stub, states };
+}
+
+function recordingLogger(entries: LogEntry[]): Logger {
+  const logger: Logger = {
+    log: (level, message, data) => {
+      entries.push({ level, message, data });
+    },
+    child: () => logger,
+  };
+  return logger;
 }
 
 async function codeOf(call: Promise<unknown>): Promise<string> {
@@ -350,5 +367,89 @@ describe('ConnectionManager', () => {
     await manager[Symbol.asyncDispose]();
 
     expect(stub.disposed).toHaveLength(2);
+  });
+
+  /**
+   * The lifecycle log is how a user tells "the server dropped me" from "it
+   * timed out" from "I edited the connection" — three causes that all look like
+   * a reconnect from the outside.
+   */
+  describe('lifecycle log', () => {
+    const messages = (logs: readonly LogEntry[]): string[] => logs.map((entry) => entry.message);
+
+    it('says a connection opened, and how long it took', async () => {
+      const logs: LogEntry[] = [];
+      const { manager } = await setup({}, { logs });
+
+      await manager.acquire('c1');
+
+      const connected = logs.find((entry) => entry.message === 'Connected');
+      expect(connected?.level).toBe('info');
+      expect(connected?.data).toMatchObject({ connectionId: 'c1', ms: expect.any(Number) });
+    });
+
+    it('warns with the error code when a connect fails', async () => {
+      const logs: LogEntry[] = [];
+      const { manager } = await setup(
+        {
+          connect: async () => {
+            throw new OmniFsError({
+              code: 'ConnectionFailed',
+              message: 'refused',
+              retryable: true,
+            });
+          },
+        },
+        { logs },
+      );
+
+      await codeOf(manager.acquire('c1'));
+
+      expect(logs.find((entry) => entry.message === 'Connect failed')).toMatchObject({
+        level: 'warn',
+        data: { connectionId: 'c1', code: 'ConnectionFailed', retryable: true },
+      });
+    });
+
+    it('says why it reconnected when the live connection had died', async () => {
+      const logs: LogEntry[] = [];
+      let alive = true;
+      const { manager } = await setup({ isAlive: () => alive }, { logs });
+      await manager.acquire('c1');
+
+      alive = false;
+      await manager.acquire('c1');
+
+      expect(messages(logs)).toContain('Connection lost; reconnecting');
+    });
+
+    it('gives the reason for every disconnect', async () => {
+      vi.useFakeTimers();
+      const logs: LogEntry[] = [];
+      const { manager, configStore } = await setup({}, { idleTimeoutMs: 1_000, logs });
+
+      await manager.acquire('c1');
+      await manager.disconnect('c1');
+      await manager.acquire('c1');
+      await manager.invalidate((await configStore.get('c1'))!);
+      await manager.acquire('c1');
+      await vi.advanceTimersByTimeAsync(1_001);
+      await manager.acquire('c1');
+      await manager[Symbol.asyncDispose]();
+
+      const reasons = logs
+        .filter((entry) => entry.message === 'Disconnected')
+        .map((entry) => entry.data?.['reason']);
+      expect(reasons).toEqual(['user', 'config-changed', 'idle', 'shutdown']);
+    });
+
+    it('says nothing when asked to disconnect a connection that is not open', async () => {
+      const logs: LogEntry[] = [];
+      const { manager } = await setup({}, { logs });
+
+      await manager.disconnect('c1');
+
+      expect(messages(logs)).not.toContain('Disconnected');
+    });
   });
 });

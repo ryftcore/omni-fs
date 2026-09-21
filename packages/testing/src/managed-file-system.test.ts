@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EntryCache, ManagedFileSystem, NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
-import type { DirEntry, ProviderCapabilities, ReadOptions, WriteOptions } from '@omni-fs/core';
+import type {
+  DirEntry,
+  Logger,
+  LogLevel,
+  ProviderCapabilities,
+  ReadOptions,
+  WriteOptions,
+} from '@omni-fs/core';
 import { MemoryFileSystem } from './memory-file-system.js';
 
 /**
@@ -603,5 +610,115 @@ describe('ManagedFileSystem.copy and the connection concurrency ceiling', () => 
     // The ceiling is a floor for streaming, not a switch to buffering for
     // everyone: a provider that raises it gets the streaming path back.
     expect(sinkSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * The per-operation log is what a user reads when "it is slow" or "it fails"
+ * and nothing else says why, so its shape is held here: every operation says
+ * how long it took, a listing says whether the cache answered it, and a failure
+ * carries the code a host would have switched on.
+ */
+describe('ManagedFileSystem operation log', () => {
+  interface Entry {
+    readonly level: LogLevel;
+    readonly message: string;
+    readonly data: Record<string, unknown> | undefined;
+  }
+
+  function logged(): { logger: Logger; entries: Entry[] } {
+    const entries: Entry[] = [];
+    const logger: Logger = {
+      log: (level, message, data) => {
+        entries.push({ level, message, data });
+      },
+      child: () => logger,
+    };
+    return { logger, entries };
+  }
+
+  function withLog(capabilities: Partial<ProviderCapabilities> = {}) {
+    const inner = new MemoryFileSystem({ capabilities });
+    const { logger, entries } = logged();
+    const fs = new ManagedFileSystem({
+      connectionId: CONNECTION,
+      inner,
+      cache: new EntryCache(),
+      logger,
+    });
+    return { inner, fs, entries };
+  }
+
+  const find = (entries: readonly Entry[], message: string): Entry[] =>
+    entries.filter((entry) => entry.message === message);
+
+  it('times a listing the server answered, and counts what came back', async () => {
+    const { inner, fs, entries } = withLog();
+    inner.seed({ '/a/one.txt': '1', '/a/two.txt': '2' });
+
+    await names(fs.list(p('/a')));
+
+    const [entry] = find(entries, 'list');
+    expect(entry?.level).toBe('debug');
+    expect(entry?.data).toMatchObject({ path: '/a', entries: 2, cache: 'miss' });
+    expect(entry?.data?.['ms']).toEqual(expect.any(Number));
+  });
+
+  it('logs a listing the cache answered at trace, so debug stays about the network', async () => {
+    const { inner, fs, entries } = withLog();
+    inner.seed({ '/a/one.txt': '1' });
+
+    await names(fs.list(p('/a')));
+    await names(fs.list(p('/a')));
+
+    const hits = find(entries, 'list').filter((entry) => entry.data?.['cache'] === 'hit');
+    expect(hits).toHaveLength(1);
+    expect(hits[0]?.level).toBe('trace');
+  });
+
+  it('times a stat the server answered', async () => {
+    const { inner, fs, entries } = withLog();
+    inner.seed({ '/a/one.txt': '1' });
+
+    await fs.stat(p('/a/one.txt'));
+
+    expect(find(entries, 'stat')[0]).toMatchObject({
+      level: 'debug',
+      data: { path: '/a/one.txt', cache: 'miss' },
+    });
+  });
+
+  it('says how many bytes a read and a write moved', async () => {
+    const { fs, entries } = withLog();
+
+    await fs.writeFile(p('/a/one.txt'), bytes('hello'));
+    await fs.readFile(p('/a/one.txt'));
+
+    expect(find(entries, 'write')[0]?.data).toMatchObject({ path: '/a/one.txt', bytes: 5 });
+    expect(find(entries, 'read')[0]?.data).toMatchObject({ path: '/a/one.txt', bytes: 5 });
+  });
+
+  it('says when a rename was emulated, because that is why it was slow', async () => {
+    const { inner, fs, entries } = withLog({ canRename: false });
+    inner.seed({ '/a/one.txt': '1' });
+
+    await fs.rename(p('/a/one.txt'), p('/a/two.txt'));
+
+    expect(find(entries, 'rename')[0]?.data).toMatchObject({
+      from: '/a/one.txt',
+      to: '/a/two.txt',
+      emulated: true,
+    });
+  });
+
+  it('logs a failure with its code and whether it is worth retrying, then rethrows it', async () => {
+    const { fs, entries } = withLog();
+
+    expect(await codeOf(fs.stat(p('/missing.txt')))).toBe('NotFound');
+
+    expect(find(entries, 'stat failed')[0]).toMatchObject({
+      level: 'debug',
+      data: { path: '/missing.txt', code: 'NotFound', retryable: false },
+    });
   });
 });

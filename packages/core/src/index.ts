@@ -74,6 +74,7 @@ export { ConnectionManager } from './connection/manager.js';
 export type {
   ConnectionManagerOptions,
   ConnectionStateChange,
+  DisconnectReason,
   ProbeResult,
   ProbeTarget,
 } from './connection/manager.js';
