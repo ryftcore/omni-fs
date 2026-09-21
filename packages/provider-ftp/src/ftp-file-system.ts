@@ -1,9 +1,10 @@
-import { OmniFsError, RemotePath, collectStream, streamFrom } from '@omni-fs/core';
+import { OmniFsError, RemotePath, collectStream, streamFrom, throwIfAborted } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
   FileStat,
   Logger,
+  OverwriteOptions,
   ProviderCapabilities,
   ProviderContext,
   ReadOptions,
@@ -243,8 +244,66 @@ export class FtpFileSystem implements RemoteFileSystem {
     }, signal);
   }
 
-  async delete(_path: RemotePath, _options?: DeleteOptions): Promise<void> {
-    throw notImplemented('delete');
+  async delete(path: RemotePath, options?: DeleteOptions): Promise<void> {
+    const signal = options?.signal;
+    await this.#requirePool().lease(async (channel) => {
+      // The stat is not overhead: 550 from `DELE` on a directory and 550 from
+      // `RMD` on a non-empty one are the same reply, and sending the wrong
+      // command first would make a missing file and a full directory
+      // indistinguishable.
+      const stat = await this.#stat(channel, path, signal);
+
+      if (stat.type !== 'directory') {
+        await channel.unlink(this.#remote(path), signal);
+        return;
+      }
+      if (options?.recursive === true) {
+        await this.#deleteTree(channel, path, signal);
+        return;
+      }
+      await this.#removeDirectory(channel, path, signal);
+    }, signal);
+  }
+
+  async rename(from: RemotePath, to: RemotePath, options?: OverwriteOptions): Promise<void> {
+    const signal = options?.signal;
+    await this.#requirePool().lease(async (channel) => {
+      if (options?.overwrite === false) await this.#refuseIfPresent(channel, to, signal);
+
+      try {
+        await channel.rename(this.#remote(from), this.#remote(to), signal);
+      } catch (cause) {
+        // Classified up front rather than narrowed on the raw reply code: a
+        // permission-denied RNFR/RNTO answers 550 too, the same reply as "the
+        // destination is in the way," and `#exists` below cannot tell those
+        // apart — it would find the destination present either way. Getting
+        // this wrong is not a wrong error code, it is deleting a destination
+        // the caller never asked to touch, so a `PermissionDenied`
+        // classification (or anything that is not a plain 550) propagates
+        // unchanged, exactly as `#mkdirp` treats it.
+        const error = toOmniFsError(cause, from.value);
+        if (
+          options?.overwrite === false ||
+          error.code === 'PermissionDenied' ||
+          !isReplyCode(error, 550)
+        ) {
+          throw error;
+        }
+
+        // A 550 here means either "the destination is in the way" or "the
+        // source is gone", and only a look can say which. Deleting on the
+        // second reading would destroy a file the caller never named.
+        if (!(await this.#exists(channel, to, signal))) throw error;
+
+        this.#logger.log(
+          'warn',
+          'FTP rename replaced the destination in two steps, which is not atomic',
+          { from: from.value, to: to.value },
+        );
+        await channel.unlink(this.#remote(to), signal);
+        await channel.rename(this.#remote(from), this.#remote(to), signal);
+      }
+    }, signal);
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
@@ -373,6 +432,60 @@ export class FtpFileSystem implements RemoteFileSystem {
   }
 
   /**
+   * Depth first, because a parent cannot be removed until it is empty. The
+   * abort check is between entries rather than around the walk: a tree delete
+   * is many round trips, and a cancelled one should stop at the next of them
+   * rather than run to completion.
+   */
+  async #deleteTree(
+    channel: FtpChannel,
+    directory: RemotePath,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    const entries = await channel.list(this.#remote(directory), signal);
+    for (const child of entries) {
+      const childPath = directory.join(child.name);
+      throwIfAborted(signal, childPath.value);
+      if (child.type === 'directory') await this.#deleteTree(channel, childPath, signal);
+      else await channel.unlink(this.#remote(childPath), signal);
+    }
+    await channel.rmdir(this.#remote(directory), signal);
+  }
+
+  /**
+   * `RMD` on a non-empty directory and `RMD` on one this connection is not
+   * allowed to touch are the same 550, so the raw code cannot say which
+   * happened — only `toOmniFsError`'s message classification can, the same
+   * split `#mkdirp` already relies on. A permission failure propagates as
+   * `PermissionDenied` without ever reaching the listing probe below: that
+   * probe cannot disambiguate either, since a locked directory can hold
+   * entries just as easily as an empty one, so letting a permission error
+   * fall through to it would report a locked directory as `NotEmpty` instead.
+   */
+  async #removeDirectory(
+    channel: FtpChannel,
+    directory: RemotePath,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    try {
+      await channel.rmdir(this.#remote(directory), signal);
+    } catch (cause) {
+      const error = toOmniFsError(cause, directory.value);
+      if (error.code === 'PermissionDenied' || !isReplyCode(error, 550)) throw error;
+
+      const entries = await channel.list(this.#remote(directory), signal).catch(() => []);
+      if (entries.length === 0) throw error;
+      throw new OmniFsError({
+        code: 'NotEmpty',
+        message: `Directory is not empty: ${directory.value}`,
+        path: directory.value,
+        providerId: 'ftp',
+        cause: error,
+      });
+    }
+  }
+
+  /**
    * `exactOptionalPropertyTypes` is why these are conditional spreads rather
    * than two assignments: `FtpTransferOptions.signal` may be absent, and an
    * explicit `undefined` is not the same thing.
@@ -396,12 +509,4 @@ export class FtpFileSystem implements RemoteFileSystem {
     }
     return pool;
   }
-}
-
-function notImplemented(operation: string): OmniFsError {
-  return new OmniFsError({
-    code: 'Unsupported',
-    message: `FTP provider: ${operation} is not implemented yet.`,
-    providerId: 'ftp',
-  });
 }

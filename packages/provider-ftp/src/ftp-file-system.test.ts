@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NOOP_LOGGER, OmniFsError, RemotePath, collectStream } from '@omni-fs/core';
-import type { ConnectionConfig, ProviderContext } from '@omni-fs/core';
+import type { ConnectionConfig, Logger, LogLevel, ProviderContext } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import { FTP_CAPABILITIES, FtpFileSystem } from './ftp-file-system.js';
 import type { FtpChannel } from './ftp-channel.js';
@@ -677,6 +677,203 @@ describe('createDirectory', () => {
     await expect(fs.createDirectory?.(RemotePath.parse('/locked'))).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'PermissionDenied',
     );
+  });
+});
+
+describe('delete', () => {
+  it('unlinks a file', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('a.txt') });
+    const fs = await connected(channel);
+    await fs.delete(RemotePath.parse('/a.txt'));
+    expect(channel.calls).toContain('unlink /home/alice/a.txt');
+  });
+
+  it('removes an empty directory', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('empty', { type: 'directory' }) });
+    const fs = await connected(channel);
+    await fs.delete(RemotePath.parse('/empty'));
+    expect(channel.calls).toContain('rmdir /home/alice/empty');
+  });
+
+  it('refuses a non-recursive delete of a directory with something in it', async () => {
+    // A caller who asked to remove an empty directory must not silently lose a
+    // tree. 550 from RMD means "not empty" as often as "not there", so the
+    // listing is what decides which.
+    const channel = fakeChannel({
+      mlst: async () => entry('full', { type: 'directory' }),
+      list: async () => [entry('child.txt')],
+    });
+    channel.rmdir = async () => {
+      throw Object.assign(new Error('550 Directory not empty'), { code: 550 });
+    };
+    const fs = await connected(channel);
+    await expect(fs.delete(RemotePath.parse('/full'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'NotEmpty',
+    );
+  });
+
+  // A permission-denied RMD answers 550 too — the same reply as "not empty" —
+  // and the listing probe cannot tell the two apart either, since a locked
+  // directory can hold entries just as easily as an empty one. Reporting this
+  // as NotEmpty would tell the caller to empty a directory they are simply
+  // not allowed to remove.
+  it('reports a locked directory as PermissionDenied rather than NotEmpty', async () => {
+    const channel = fakeChannel({
+      mlst: async () => entry('locked', { type: 'directory' }),
+      list: async () => [entry('child.txt')],
+    });
+    channel.rmdir = async () => {
+      throw lockedDirectoryError('/home/alice/locked');
+    };
+    const fs = await connected(channel);
+    await expect(fs.delete(RemotePath.parse('/locked'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'PermissionDenied',
+    );
+  });
+
+  it('walks a tree depth first when recursive', async () => {
+    const tree: Record<string, readonly FtpEntry[]> = {
+      '/home/alice/tree': [entry('one.txt'), entry('nested', { type: 'directory' })],
+      '/home/alice/tree/nested': [entry('two.txt')],
+    };
+    const channel = fakeChannel({
+      mlst: async (path) =>
+        path.endsWith('/tree') ? entry('tree', { type: 'directory' }) : entry('x'),
+      list: async (path) => tree[path] ?? [],
+    });
+    const fs = await connected(channel);
+    await fs.delete(RemotePath.parse('/tree'), { recursive: true });
+
+    expect(channel.calls).toEqual(
+      expect.arrayContaining([
+        'unlink /home/alice/tree/nested/two.txt',
+        'rmdir /home/alice/tree/nested',
+        'unlink /home/alice/tree/one.txt',
+        'rmdir /home/alice/tree',
+      ]),
+    );
+    // The deepest directory goes before its parent, or the parent is never empty.
+    expect(channel.calls.indexOf('rmdir /home/alice/tree/nested')).toBeLessThan(
+      channel.calls.indexOf('rmdir /home/alice/tree'),
+    );
+  });
+
+  it('stops a recursive walk when the signal aborts', async () => {
+    const controller = new AbortController();
+    const channel = fakeChannel({
+      mlst: async () => entry('tree', { type: 'directory' }),
+      list: async () => {
+        controller.abort();
+        return [entry('one.txt'), entry('two.txt')];
+      },
+    });
+    const fs = await connected(channel);
+    await expect(
+      fs.delete(RemotePath.parse('/tree'), { recursive: true, signal: controller.signal }),
+    ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled');
+  });
+
+  it('reports a missing path as NotFound rather than succeeding quietly', async () => {
+    const channel = fakeChannel({ hasMlst: false, list: async () => [] });
+    const fs = await connected(channel);
+    await expect(fs.delete(RemotePath.parse('/gone.txt'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'NotFound',
+    );
+  });
+});
+
+describe('rename', () => {
+  it('renames in one command pair on one channel', async () => {
+    const channel = fakeChannel();
+    const fs = await connected(channel);
+    await fs.rename?.(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'));
+    expect(channel.calls).toContain('rename /home/alice/before.txt /home/alice/after.txt');
+  });
+
+  it('refuses to replace the destination when overwrite is false', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('after.txt') });
+    const fs = await connected(channel);
+    await expect(
+      fs.rename?.(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'), {
+        overwrite: false,
+      }),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+    expect(channel.calls.some((call) => call.startsWith('rename'))).toBe(false);
+  });
+
+  it('deletes and retries on a server whose RNTO will not replace', async () => {
+    // vsftpd replaces an existing destination; others answer 550. Honouring
+    // overwrite: true on the second kind takes two steps.
+    let attempts = 0;
+    const channel = fakeChannel({ mlst: async () => entry('after.txt') });
+    channel.rename = async (from, to) => {
+      attempts += 1;
+      channel.calls.push(`rename ${from} ${to}`);
+      if (attempts === 1) throw Object.assign(new Error('550 File exists'), { code: 550 });
+    };
+
+    const fs = await connected(channel);
+    await fs.rename?.(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'));
+
+    expect(channel.calls).toContain('unlink /home/alice/after.txt');
+    expect(attempts).toBe(2);
+  });
+
+  it('says out loud that the two-step replace was not atomic', async () => {
+    const entries: { level: LogLevel; message: string }[] = [];
+    const logger: Logger = {
+      log: (level, message) => {
+        entries.push({ level, message });
+      },
+      child: () => logger,
+    };
+
+    let attempts = 0;
+    const channel = fakeChannel({ mlst: async () => entry('after.txt') });
+    channel.rename = async () => {
+      attempts += 1;
+      if (attempts === 1) throw Object.assign(new Error('550 File exists'), { code: 550 });
+    };
+
+    const fs = new FtpFileSystem({ ...context(), logger }, async () => channel);
+    await fs.connect();
+    await fs.rename?.(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt'));
+
+    expect(entries.some((e) => e.level === 'warn' && /atomic/i.test(e.message))).toBe(true);
+  });
+
+  it('does not delete anything when the source is what was missing', async () => {
+    // A 550 from RNFR means the *source* is gone. Deleting the destination
+    // then would destroy a file the caller never asked about.
+    const channel = fakeChannel({ hasMlst: false, list: async () => [] });
+    channel.rename = async () => {
+      throw Object.assign(new Error('550 No such file'), { code: 550 });
+    };
+    const fs = await connected(channel);
+    await expect(
+      fs.rename?.(RemotePath.parse('/gone.txt'), RemotePath.parse('/after.txt')),
+    ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'NotFound');
+    expect(channel.calls.some((call) => call.startsWith('unlink'))).toBe(false);
+  });
+
+  // A permission-denied RNFR/RNTO also answers 550 and also leaves the
+  // destination in place, so `#exists` alone cannot distinguish it from "the
+  // destination is in the way" — only the classification can. Misreading it
+  // would delete a perfectly good destination the caller never asked to touch.
+  it('does not delete the destination when the rename itself is refused for permission', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('after.txt') });
+    channel.rename = async () => {
+      throw lockedDirectoryError('/home/alice/before.txt');
+    };
+    const fs = await connected(channel);
+    await expect(
+      fs.rename?.(RemotePath.parse('/before.txt'), RemotePath.parse('/after.txt')),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'PermissionDenied',
+    );
+    expect(channel.calls.some((call) => call.startsWith('unlink'))).toBe(false);
   });
 });
 
