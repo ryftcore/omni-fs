@@ -202,9 +202,26 @@ jobs:
       # After Open VSX, so a release page never offers a version Open VSX does
       # not have. This .vsix is also the one to upload to the VS Code
       # Marketplace by hand.
-      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: dist-vsix/*.vsix
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
+      #
+      # The repository has immutable releases on: once a release is published,
+      # nothing can be attached to it, and its tag can never be used again.
+      # `gh release create` given files creates a draft, uploads to it, and
+      # only then publishes — the order that survives immutability. An action
+      # that publishes first and uploads second leaves an empty release that
+      # can never be fixed.
+      #
+      # A retry finds the release already published and stops there, since an
+      # immutable release cannot be changed anyway.
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $GITHUB_REF_NAME already exists; nothing to do."
+            exit 0
+          fi
+          flags=(--repo "$GITHUB_REPOSITORY" --verify-tag --generate-notes --title "$GITHUB_REF_NAME")
+          if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+          gh release create "$GITHUB_REF_NAME" dist-vsix/*.vsix "${flags[@]}"
