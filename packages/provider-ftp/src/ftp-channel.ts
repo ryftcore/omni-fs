@@ -320,7 +320,15 @@ export class FtpControlChannel implements FtpChannel {
 
     const sink = new Writable({
       write: (chunk: Buffer, _encoding, callback) => {
-        if (settled) {
+        // `settled` is our own teardown; `pass.destroyed` is the consumer's —
+        // `ReadableStream.cancel()` destroys the PassThrough directly, without
+        // going through `finish`. Either way there is nowhere left to put the
+        // bytes, and arming a `drain`/`close` listener below on a stream that
+        // can no longer emit either would strand this callback and hang
+        // `basic-ftp` until its control timeout. Reading `destroyed` rather
+        // than waiting for `close` also closes the window between the two,
+        // since `destroy()` sets the flag now and emits the event a tick later.
+        if (settled || pass.destroyed) {
           callback();
           return;
         }
@@ -386,9 +394,9 @@ export class FtpControlChannel implements FtpChannel {
     // The `Buffer.from` is the load-bearing part, not the array around it.
     // `Readable.from` special-cases Buffer and string and pushes the whole
     // value as one chunk; a bare `Uint8Array` is just an iterable of numbers,
-    // so it would be yielded a byte at a time and the upload would arrive
-    // corrupted while still "succeeding". The array wrapper is belt and braces
-    // if the conversion is ever dropped.
+    // so it would be yielded a byte at a time and the transfer would fail
+    // loudly with `ERR_INVALID_ARG_TYPE` on the first chunk. The array wrapper
+    // is belt and braces if the conversion is ever dropped.
     const source = Readable.from([Buffer.from(data.buffer, data.byteOffset, data.byteLength)]);
     await this.#run(() => this.#client.uploadFrom(source, path), path, options?.signal);
     options?.onProgress?.(data.byteLength);

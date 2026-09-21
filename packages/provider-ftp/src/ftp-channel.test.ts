@@ -422,6 +422,48 @@ describe('FtpControlChannel transfers', () => {
     expect(secondAccepted).toBe(true);
   });
 
+  // Explicit timeout: a regression here hangs rather than fails.
+  it('releases the download when the consumer cancels the stream', async () => {
+    // `ReadableStream.cancel()` destroys the PassThrough without going
+    // through finish(), so a sink that afterwards waits on 'drain' or
+    // 'close' waits on a stream that can never emit either again. That
+    // strands the callback and hangs `basic-ftp` until its 30 s control
+    // timeout. Back-pressure created this path: before it, the callback was
+    // unconditional and a cancelled download simply drained.
+    //
+    // It takes a write *after* the cancel to show it: the chunk already
+    // parked when the consumer gives up is released by that same 'close'.
+    // So the fake keeps feeding, one chunk at a time, the way a real
+    // download does.
+    let finished = false;
+    const client = fakeClient({
+      downloadTo: async (destination: Writable) => {
+        for (let chunk = 0; chunk < 8; chunk += 1) {
+          await new Promise<void>((resolve, reject) => {
+            destination.write(Buffer.alloc(64 * 1024), (error) =>
+              error === undefined || error === null ? resolve() : reject(error),
+            );
+          });
+        }
+        destination.end();
+        finished = true;
+        return { code: 226, message: '226 done' };
+      },
+    });
+    const channel = await open(client);
+    const stream = await channel.openReadStream('/data/big.bin');
+
+    // Back-pressure is engaged: the sink is parked waiting for a reader.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(finished).toBe(false);
+
+    // The reader gives up instead of draining. The download must unwind,
+    // not sit on a dead stream.
+    await stream.cancel();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(finished).toBe(true);
+  }, 2_000);
+
   it('surfaces a failed download on the stream, not from the call that made it', async () => {
     const client = fakeClient({
       downloadTo: async () => {
@@ -529,7 +571,7 @@ describe('FtpControlChannel transfers', () => {
     await expect(pending).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'QuotaExceeded',
     );
-  }, 2_000); // for the default timeout to notice. // A regression here hangs rather than fails, so the suite must not wait
+  }, 2_000);
 
   it('rejects a pending write when the caller aborts mid-stream', async () => {
     // Same hang, reached the other way: the stream's own abort() handler
