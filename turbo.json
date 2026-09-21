@@ -28,11 +28,40 @@
       "cache": false,
       "outputs": []
     },
+    "build:tests": {
+      "dependsOn": ["^build"],
+      "outputs": ["out-test/**"]
+    },
+    "test:extension": {
+      "dependsOn": ["build", "build:tests"],
+      "cache": false,
+      "outputs": []
+    },
+    "test:extension:live": {
+      // Deliberately NOT ["build", "build:tests"], unlike the hermetic label
+      // above. The live label's whole claim is about the artifact that ships,
+      // so it runs against the minified bundle `package` left in `out/`; an
+      // edge to `build` would overwrite that with a dev bundle and the run
+      // would prove something else. The hermetic label makes no such claim,
+      // so a dev bundle is fine there and `build` keeps it self-contained.
+      "dependsOn": ["build:tests"],
+      "cache": false,
+      "outputs": []
+    },
     "clean": {
       "cache": false
     },
     "package": {
       "dependsOn": ["^build"],
+      // Never cached. The script is `rm -rf out && esbuild --production &&
+      // vsce package`, so it writes `out/` as well as the .vsix — and `out/`
+      // is `build`'s declared output, not this task's. Declaring it here
+      // would put two tasks in charge of one directory holding different
+      // content. Leaving it undeclared and cacheable is worse: a cache hit
+      // replays the .vsix, skips the script, and leaves whatever dev bundle
+      // `build` last wrote in `out/` — which is what the live label then
+      // tests. A few seconds per run buys `package:vsix` meaning what it says.
+      "cache": false,
       "outputs": ["*.vsix"]
     }
   }

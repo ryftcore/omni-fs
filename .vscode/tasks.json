@@ -10,6 +10,14 @@
     },
     {
       "type": "npm",
+      "script": "build:tests",
+      "path": "apps/vscode",
+      "problemMatcher": "$tsc",
+      "label": "npm: build:tests - apps/vscode",
+      "detail": "Bundle the extension-host tests into apps/vscode/out-test"
+    },
+    {
+      "type": "npm",
       "script": "dev",
       "problemMatcher": "$tsc-watch",
       "isBackground": true,

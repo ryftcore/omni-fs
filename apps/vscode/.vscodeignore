@@ -11,10 +11,20 @@ src/**
 node_modules/**
 
 esbuild.mjs
-tsconfig.json
-tsconfig.webview.json
+# A glob, not a list of names. tsconfig.test.json shipped in a package because
+# its two siblings were excluded one at a time and nobody added the third.
+tsconfig*.json
 *.tsbuildinfo
 *.vsix
+
+# The extension-host test bundles and their runner config. Built by
+# `esbuild.mjs --tests-only`, never by `package`, so they are absent on a clean
+# CI runner — but present on any developer machine that has run the suite, and
+# a sourcemapped, unminified test bundle is exactly the kind of thing that eats
+# the 2 MB budget. vsce's own defaults skip the downloaded `.vscode-test/`
+# directory but not the config file beside it.
+out-test/**
+.vscode-test.mjs
 
 # Bundled output only: no declarations, no sourcemaps in a production package.
 out/**/*.d.ts

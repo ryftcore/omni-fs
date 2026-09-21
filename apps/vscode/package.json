@@ -106,13 +106,13 @@
       },
       {
         "command": "omniFs.download",
-        "title": "Download\u2026",
+        "title": "Download…",
         "category": "Omni-FS",
         "icon": "$(cloud-download)"
       },
       {
         "command": "omniFs.upload",
-        "title": "Upload\u2026",
+        "title": "Upload…",
         "category": "Omni-FS",
         "icon": "$(cloud-upload)"
       },
@@ -202,7 +202,7 @@
           "type": "array",
           "default": [],
           "scope": "resource",
-          "markdownDescription": "Connection definitions. Credentials are **never** stored here \u2014 they live in the OS keychain via VS Code's secret storage, so this list is safe to commit and share with your team.",
+          "markdownDescription": "Connection definitions. Credentials are **never** stored here — they live in the OS keychain via VS Code's secret storage, so this list is safe to commit and share with your team.",
           "items": {
             "type": "object"
           }
@@ -239,11 +239,14 @@
   },
   "scripts": {
     "build": "node esbuild.mjs",
-    "dev": "node esbuild.mjs --watch",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
+    "dev": "node esbuild.mjs --watch --tests",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit && tsc -p tsconfig.test.json --noEmit",
+    "build:tests": "node esbuild.mjs --tests-only",
+    "test:extension": "node esbuild.mjs --tests-only && vscode-test --label hermetic",
+    "test:extension:live": "node esbuild.mjs --tests-only && vscode-test --label live",
     "lint": "eslint src",
     "package": "rm -rf out && node esbuild.mjs --production && vsce package --no-dependencies",
-    "clean": "rm -rf out *.tsbuildinfo",
+    "clean": "rm -rf out out-test *.tsbuildinfo",
     "prepublishOnly": "echo \"Omni-FS is a VS Code extension: publish with 'pnpm --filter omni-fs-vscode exec vsce publish', not npm.\" && exit 1"
   },
   "dependencies": {
@@ -257,13 +260,17 @@
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@omni-fs/testing": "workspace:*",
+    "@types/mocha": "^10.0.10",
     "@types/node": "^22.8.0",
-    "@types/vscode": "^1.90.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
-    "typescript": "^6.0.3",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.15",
+    "@vscode/test-electron": "^3.1.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
-    "@vscode/vsce": "^4.0.0"
+    "typescript": "^6.0.3"
   },
   "repository": {
     "type": "git",

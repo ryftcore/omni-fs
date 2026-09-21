@@ -3,7 +3,14 @@
 # Built here rather than pulled: the widely-used SFTP images are either amd64
 # only (so they emulate on Apple Silicon) or configure auth through a bespoke
 # JSON schema. This is twelve lines, multi-arch, and does exactly one thing.
-FROM alpine:3.20
+#
+# Pinned by digest, for the same reason the workflow actions are: a tag is
+# mutable, so `alpine:3.20` alone means the test server is whatever was pushed
+# under that tag today. The digest is the *manifest list*, not one platform's
+# image, so this is still multi-arch and still builds natively on both
+# runners and laptops. Dependabot's docker ecosystem bumps it when Alpine
+# ships a patch — without that, a pin is just an old image.
+FROM alpine:3.20@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc
 
 RUN apk add --no-cache openssh-server openssh-sftp-server \
   && ssh-keygen -A \

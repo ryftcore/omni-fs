@@ -58,6 +58,21 @@ export interface OmniFsErrorOptions {
   readonly retryable?: boolean | undefined;
 }
 
+/**
+ * Realm-global, so two copies of this module agree about their own errors.
+ *
+ * `instanceof` cannot: it compares class identity, and every esbuild bundle
+ * gets its own class object. The extension bundle, a test bundle, and a
+ * third-party extension that registers a provider each carry a copy of this
+ * module — and an OmniFsError one of them throws must still be recognised by
+ * the others, or `toVsCodeError` passes it through untranslated and every
+ * remote failure reaches the editor as a generic error.
+ *
+ * `Symbol.for` looks the symbol up in the process-wide registry, so all
+ * copies resolve the same key.
+ */
+const OMNI_FS_ERROR = Symbol.for('omni-fs.error');
+
 export class OmniFsError extends Error {
   readonly code: OmniFsErrorCode;
   readonly path: string | undefined;
@@ -71,10 +86,26 @@ export class OmniFsError extends Error {
     this.path = options.path;
     this.providerId = options.providerId;
     this.retryable = options.retryable ?? DEFAULT_RETRYABLE.has(options.code);
+    // Non-enumerable: spreads, Object.keys and JSON.stringify must not see it.
+    Object.defineProperty(this, OMNI_FS_ERROR, { value: true });
   }
 
+  /**
+   * The brand plus the one field every consumer reads. Callers above the
+   * provider line branch on `code` and nothing else — `toVsCodeError`'s
+   * default arm renders `${code}: ${message}` straight into the editor — so a
+   * branded value without one would be accepted and then shown as
+   * "undefined: undefined". Only this constructor brands anything in-repo, but
+   * the registry is published on the host's API, so a third-party provider can
+   * brand whatever it likes.
+   */
   static is(value: unknown): value is OmniFsError {
-    return value instanceof OmniFsError;
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      OMNI_FS_ERROR in value &&
+      typeof (value as { code?: unknown }).code === 'string'
+    );
   }
 
   static notFound(path: string, cause?: unknown): OmniFsError {

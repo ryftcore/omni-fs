@@ -13,10 +13,14 @@ pnpm lint           # eslint at the repo root (not per-package)
 pnpm test
 pnpm format:check   # CI enforces this
 pnpm package:vsix   # -> apps/vscode/*.vsix
+pnpm test:extension        # the extension inside a real VS Code host
+pnpm test:extension:live   # + the compose stack, against the minified bundle
 ```
 
-CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, plus
-`format:check` and the commit-title check in a separate workflow.
+CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, and
+`test:extension` on those same three; `test:extension:live` needs the compose
+stack, so it runs on Linux alone. `format:check` and the commit-title check are
+in a separate workflow.
 
 Single test:
 
@@ -25,10 +29,16 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
-`provider-ftp` is the only package without tests. `pnpm test` in
-`packages/testing` is the conformance suite, and is where most behaviour is
-actually verified. `packages/ui` runs its tests without jsdom — its state
-machine is a pure reducer, so there is no DOM to simulate.
+`provider-ftp` is the only package without tests. `apps/vscode` is tested
+separately: `pnpm test:extension` boots the real extension inside an Electron
+extension host and drives `vscode.workspace.fs` over an in-memory provider, and
+`pnpm test:extension:live` runs the _minified_ production bundle against the
+`compose.yaml` servers — the only thing that proves esbuild did not break a
+protocol SDK. Neither joins `pnpm test`, which stays hermetic and fast.
+
+`pnpm test` in `packages/testing` is the conformance suite, and is where most
+behaviour is actually verified. `packages/ui` runs its tests without jsdom —
+its state machine is a pure reducer, so there is no DOM to simulate.
 
 `pnpm package:vsix` goes through turbo on purpose — the extension bundles the
 workspace packages' `dist/`, so `pnpm --filter omni-fs-vscode package` fails on
@@ -128,6 +138,13 @@ which is what stops "universal" drifting into four different implementations.
 Tests skip themselves based on declared capabilities, so a provider is only
 penalised for lying.
 
+`RemotePath` and the slash helpers under `packages/core/src/util/` also carry
+`*.property.test.ts` files, written with `fast-check`. They hold the invariants
+documented on those types against generated input rather than a listed handful
+— the slash ones keep the regular expression they replaced as an oracle, since
+"the rewrite means the same thing" is a claim about every string. Scorecard
+counts property-based testing as fuzzing, which is the other reason they exist.
+
 `MemoryFileSystem` is a complete in-memory provider whose capabilities can be
 overridden to impersonate any protocol. `pnpm test` runs the suite against it
 twice — full-featured, then pinned to an object-store profile — which is what
@@ -137,6 +154,12 @@ The same contract has a live target: a provider package's `test:conformance`
 script runs it against that protocol's server in `compose.yaml`. The hermetic
 runs prove the suite is coherent; the live run is the one that says a real
 protocol meets it, which is why a provider is finished exactly when it passes.
+
+Two test frameworks live here and never meet: Vitest for everything hermetic,
+Mocha inside the extension host for `apps/vscode/src/test/**`. Different turbo
+task, different directory, different compile output (`out-test/`, never
+`out/`), different runner. The extension's tests compile with esbuild rather
+than `tsc` because they import `@omni-fs/testing`, which is ESM-only.
 
 ## Repo constraints
 

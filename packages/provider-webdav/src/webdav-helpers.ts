@@ -5,7 +5,7 @@ import type {
   PutFileContentsOptions,
   WebDAVClient,
 } from 'webdav';
-import { OmniFsError } from '@omni-fs/core';
+import { OmniFsError, trimTrailingSlashes } from '@omni-fs/core';
 import type { FileStat, ReadOptions, RemotePath } from '@omni-fs/core';
 import { isPreconditionFailed, toOmniFsError } from './errors.js';
 import type { WebdavSettings } from './settings.js';
@@ -48,7 +48,7 @@ export function toFileStat(stat: DavStat): FileStat {
 
 /** `/a/b/` and `/a/b` name the same collection; the root stays `/`. */
 export function collectionPath(value: string): string {
-  const trimmed = value.replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(value);
   return trimmed === '' ? '/' : trimmed;
 }
 
@@ -72,7 +72,7 @@ export function buildRange(
 
 /** The collection a resource lives in, or nothing when that is the root. */
 export function parentCollection(remote: string): string | undefined {
-  const trimmed = remote.replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(remote);
   const cut = trimmed.lastIndexOf('/');
   return cut <= 0 ? undefined : trimmed.slice(0, cut);
 }

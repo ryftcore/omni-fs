@@ -53,6 +53,117 @@ jobs:
 
       - run: pnpm test
 
+  extension-tests:
+    name: extension tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Everything inside is bounded — Mocha's own timeout fails a wedged test —
+    # but nothing bounds a hung editor download or an Electron host that never
+    # exits, and the default is six hours of runner time. A cold cache on
+    # Windows is the slow case at a few minutes; twenty leaves room for it.
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        # The same three-OS matrix as `verify`, for the reason that matrix
+        # already states: the extension ships on all three desktop platforms.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # The download key must change when VS Code does, or actions/cache never
+      # saves: it skips the upload on an exact key hit, so a key pinned only to
+      # the lockfile would re-download 150 MB on every run after a release and
+      # store none of it. A weekly stamp bounds that to one run in seven days.
+      # `%G` rather than `%Y`: it is the ISO week-numbering year that belongs
+      # with `%V`, so the first days of a January cannot reuse a key from the
+      # year before.
+      - id: stamp
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      # Only the editor download. The rest of .vscode-test is the runner's
+      # user-data and extensions directories, which must not persist between
+      # runs — stale omniFs.connections state would leak across jobs.
+      #
+      # `github.job` is in the key because this job's ubuntu leg and
+      # `extension-tests-live` both resolve `runner.os` to Linux: one key for
+      # both means whichever finishes second loses the save to a
+      # ReserveCacheError warning, on every run, forever.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/vscode/.vscode-test/vscode-*
+          key: vscode-test-${{ runner.os }}-${{ github.job }}-${{ steps.stamp.outputs.week }}
+          restore-keys: vscode-test-${{ runner.os }}-${{ github.job }}-
+
+      # Electron needs a display. Linux runners are headless, so xvfb provides
+      # a virtual one; macOS and Windows runners have a real window server.
+      - if: runner.os == 'Linux'
+        run: xvfb-run -a pnpm test:extension
+
+      - if: runner.os != 'Linux'
+        run: pnpm test:extension
+
+  extension-tests-live:
+    name: extension tests (live)
+    runs-on: ubuntu-latest
+    # Same reasoning as the job above, and here `docker compose up -d` and
+    # `package:vsix` are two more steps with no bound of their own. The job
+    # really takes about two minutes.
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - id: stamp
+        run: echo "week=$(date -u +%G-%V)" >> "$GITHUB_OUTPUT"
+        shell: bash
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: apps/vscode/.vscode-test/vscode-*
+          key: vscode-test-${{ runner.os }}-${{ github.job }}-${{ steps.stamp.outputs.week }}
+          restore-keys: vscode-test-${{ runner.os }}-${{ github.job }}-
+
+      # package:vsix leaves out/ holding the minified production build, which
+      # is the artifact the live label exists to test. A plain `pnpm build`
+      # here would quietly test an unminified bundle instead.
+      - run: pnpm package:vsix
+
+      # Readiness is the suite's job, not a compose flag: it retries the first
+      # write for up to 60s, so starting the tests a second after `up` is fine.
+      - run: docker compose up -d
+
+      - run: xvfb-run -a pnpm test:extension:live
+
+      # The one job a contributor cannot reproduce without Docker, and a
+      # container that never came up reaches the log as a single Mocha
+      # assertion. Failure-only, so the green path pays nothing.
+      - if: failure()
+        run: docker compose ps && docker compose logs --tail=50
+
   boundary:
     name: architecture boundary
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { OmniFsError } from './errors.js';
 import type { OmniFsErrorCode } from './errors.js';
 
@@ -161,5 +161,72 @@ describe('OmniFsError', () => {
       expect(OmniFsError.notFound('/a').providerId).toBeUndefined();
       expect(OmniFsError.cancelled('read').providerId).toBeUndefined();
     });
+  });
+});
+
+describe('OmniFsError.is across module copies', () => {
+  it('recognises an error built by a second instance of this module', async () => {
+    // esbuild gives the extension bundle and the test bundle each their own
+    // class object, so `instanceof` answers "no" for an error that is an
+    // OmniFsError in every way that matters. `vi.resetModules()` reproduces
+    // that here without a bundler: the dynamic import below re-evaluates
+    // errors.ts and hands back a different class.
+    vi.resetModules();
+    const second = await import('./errors.js');
+    const foreign = new second.OmniFsError({ code: 'NotFound', message: 'gone' });
+
+    expect(second.OmniFsError).not.toBe(OmniFsError);
+    expect(foreign instanceof OmniFsError).toBe(false);
+    expect(OmniFsError.is(foreign)).toBe(true);
+  });
+
+  it('recognises a structurally identical error carrying the brand', () => {
+    // The contract stated without relying on module-registry mechanics: the
+    // brand plus a string `code` is the whole test. Anything carrying both is
+    // one of ours, whichever copy of this module built it.
+    const branded = Object.defineProperty(
+      Object.assign(new Error('gone'), { code: 'NotFound' }),
+      Symbol.for('omni-fs.error'),
+      { value: true },
+    );
+
+    expect(OmniFsError.is(branded)).toBe(true);
+  });
+
+  it('refuses a branded value that has no code', () => {
+    // The brand alone is not enough. Everything above the provider line reads
+    // `.code` off whatever `is` accepts — `toVsCodeError` switches on it and
+    // its default arm renders `${code}: ${message}`, so a shapeless branded
+    // value puts "undefined: undefined" in front of the user. Nothing in this
+    // repo brands anything but the constructor, but the registry is published
+    // on `OmniFsApi`, so a third-party provider can.
+    const branded = Object.defineProperty(
+      { message: 'no code here' },
+      Symbol.for('omni-fs.error'),
+      { value: true },
+    );
+
+    expect(OmniFsError.is(branded)).toBe(false);
+  });
+
+  it('still refuses anything without the brand', () => {
+    expect(OmniFsError.is(new Error('ordinary'))).toBe(false);
+    expect(OmniFsError.is({ code: 'NotFound', message: 'shaped like one' })).toBe(false);
+    expect(OmniFsError.is(null)).toBe(false);
+    expect(OmniFsError.is(undefined)).toBe(false);
+    expect(OmniFsError.is('NotFound')).toBe(false);
+  });
+
+  it('keeps the brand off anything that serialises the error', () => {
+    // Non-enumerable: a spread-based copy of the error must not carry the
+    // brand, or every logged error grows a mystery symbol key. (The brand is
+    // separately absent after any postMessage hop, since structuredClone
+    // drops symbol-keyed properties regardless of enumerability — that is not
+    // what this assertion is about.)
+    const error = new OmniFsError({ code: 'NotFound', message: 'gone' });
+    expect(Object.getOwnPropertySymbols({ ...error })).not.toContain(Symbol.for('omni-fs.error'));
+    expect(Object.getOwnPropertyDescriptor(error, Symbol.for('omni-fs.error'))?.enumerable).toBe(
+      false,
+    );
   });
 });

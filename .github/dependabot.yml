@@ -15,6 +15,17 @@ updates:
       actions:
         patterns: ['*']
 
+  # docker/sftp/Dockerfile pins its base image by digest, which is only safe
+  # as long as something bumps it when Alpine ships a patch. This is that
+  # something.
+  - package-ecosystem: docker
+    directory: /docker/sftp
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ':arrow_up: build'
+
   - package-ecosystem: npm
     directory: /
     schedule:
@@ -34,6 +45,7 @@ updates:
           - '@eslint/*'
           - 'prettier'
           - 'vitest'
+          - 'fast-check'
           - 'turbo'
           - 'esbuild'
           - '@types/*'

@@ -1,4 +1,4 @@
-import { OmniFsError } from '@omni-fs/core';
+import { OmniFsError, trimLeadingSlashes, trimTrailingSlashes } from '@omni-fs/core';
 import type { SettingsSchema } from '@omni-fs/core';
 
 export const SFTP_SETTINGS_SCHEMA: SettingsSchema = {
@@ -120,9 +120,9 @@ export function readSettings(raw: Readonly<Record<string, unknown>>): SftpSettin
  */
 function normaliseRootPrefix(value: string | undefined): string {
   if (value === undefined) return '';
-  const trimmed = value.replace(/\/+$/, '');
+  const trimmed = trimTrailingSlashes(value);
   if (!value.startsWith('/')) return trimmed;
-  return trimmed === '' ? '/' : `/${trimmed.replace(/^\/+/, '')}`;
+  return trimmed === '' ? '/' : `/${trimLeadingSlashes(trimmed)}`;
 }
 
 function invalid(message: string): OmniFsError {

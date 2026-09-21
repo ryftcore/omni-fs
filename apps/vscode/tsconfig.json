@@ -19,6 +19,15 @@
   // silent pass. `protocol.ts` is included because it is the shared wire
   // contract the host side also imports; it is pure types with no DOM. The
   // browser-only webview files have their own program: tsconfig.webview.json.
+  //
+  // src/test/** is excluded for the same reason the webview is: it needs
+  // ambient Mocha globals that must not leak into the extension's own
+  // program. It has its own: tsconfig.test.json.
   "include": ["src/**/*.ts", "src/**/*.tsx"],
-  "exclude": ["src/webview/index.tsx", "src/webview/backend.ts", "src/webview/css.d.ts"]
+  "exclude": [
+    "src/webview/index.tsx",
+    "src/webview/backend.ts",
+    "src/webview/css.d.ts",
+    "src/test/**"
+  ]
 }

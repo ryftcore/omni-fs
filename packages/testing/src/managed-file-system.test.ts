@@ -287,6 +287,26 @@ for (const profile of PROFILES) {
         expect(await names(fs.list(p('/a')))).toEqual(['one.txt']);
       });
 
+      it('stamps every stat as read-only so the host can show it', async () => {
+        // The affordance, not the enforcement. VS Code opens a read-only
+        // editor from `FileStat.permissions`, which the host maps from this
+        // flag — never from a rejected write. Without the stamp the user types
+        // into an ordinary editor and only learns at save time.
+        const { inner, cache, fs } = make({ readOnly: true });
+        inner.seed({ '/a/one.txt': 'content' });
+
+        expect((await fs.stat(p('/a/one.txt'))).readOnly).toBe(true);
+        // Stamped on the way out, never on the way in. `EntryCache` is
+        // partitioned per connection id, so no *other* connection can read
+        // this entry — but the same id is re-wrapped with a freshly read flag
+        // on the next connect while its cached stats live out their TTL, and
+        // a stamp written into the cache would outlive the wrapper that set
+        // it.
+        expect(cache.getStat(CONNECTION, p('/a/one.txt'))?.readOnly).toBeUndefined();
+        // Which means the cache-served read has to be stamped as well.
+        expect((await fs.stat(p('/a/one.txt'))).readOnly).toBe(true);
+      });
+
       it('reports the mutating capabilities as unavailable', async () => {
         const { fs } = make({ readOnly: true });
 

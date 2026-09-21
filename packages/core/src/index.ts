@@ -101,3 +101,4 @@ export { DisposableStore, Emitter } from './util/events.js';
 export type { Listener } from './util/events.js';
 export { throwIfAborted, withCancellation, withTimeout } from './util/cancellation.js';
 export { collectStream, concat, streamFrom } from './util/streams.js';
+export { trimLeadingSlashes, trimSlashes, trimTrailingSlashes } from './util/slashes.js';

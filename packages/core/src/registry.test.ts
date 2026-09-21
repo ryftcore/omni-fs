@@ -119,3 +119,48 @@ describe('ProviderRegistry', () => {
     });
   });
 });
+
+describe('register freezes what it stores', () => {
+  it('refuses an in-place swap of create()', () => {
+    // The registry is published on the extension's API, so `get()` hands a
+    // co-resident extension the live object. `create` receives `getSecret`,
+    // so replacing it in place would hand over every credential.
+    const registry = new ProviderRegistry();
+    registry.register(definition({ id: 'swappable', schemes: ['swappable'] }));
+    const stored = registry.get('swappable');
+
+    expect(Object.isFrozen(stored)).toBe(true);
+    expect(() => {
+      (stored as { create: unknown }).create = () => {
+        throw new Error('hijacked');
+      };
+    }).toThrow(TypeError);
+  });
+
+  it('freezes the schemes array too, because disposal iterates it', () => {
+    const registry = new ProviderRegistry();
+    registry.register(definition({ id: 'pinned', schemes: ['pinned'] }));
+    const stored = registry.get('pinned');
+
+    expect(Object.isFrozen(stored.schemes)).toBe(true);
+    expect(() => {
+      (stored.schemes as string[]).push('smuggled');
+    }).toThrow(TypeError);
+  });
+
+  it('still lets a caller spread it into a new definition', () => {
+    // How the extension tests put a fake in front of a real provider: the
+    // spread produces a fresh object, so freezing the source costs nothing.
+    const registry = new ProviderRegistry();
+    registry.register(definition({ id: 'real', schemes: ['real'], displayName: 'real' }));
+    const real = registry.get('real');
+
+    const registration = registry.register({ ...real, id: 'real-test', schemes: ['real-test'] });
+    expect(registry.get('real-test').displayName).toBe('real');
+
+    registration[Symbol.dispose]();
+    expect(registry.tryGet('real-test')).toBeUndefined();
+    // Disposing the copy must not have taken the original's scheme with it.
+    expect(registry.getByScheme('real')?.id).toBe('real');
+  });
+});
