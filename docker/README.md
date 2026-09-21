@@ -18,10 +18,12 @@ in its own protocol (an FTP `220` on all three listeners, sshd's identification
 string, a WebDAV `PROPFIND` answered `207`), and the two seed jobs run ahead of
 the servers, so `--wait` returns once the stack is answering _and_ seeded.
 
-The four services are named because `--wait` given no names also waits on
-`minio-init` and `file-seed`, and treats their clean exit as a failure —
-`container … exited (0)`, exit code 1. Naming the long-running four still
-pulls both seed jobs in and still waits for them.
+The four services are named to say which ones the suite talks to, not because
+omitting them breaks. `--wait` given no names also waits on `minio-init` and
+`file-seed`, and still exits 0: chaining `file-seed` behind `minio-init` and
+the servers behind `file-seed` is what makes Compose read both one-shots as
+intentionally terminating rather than as containers that died. Naming the
+long-running four still pulls both seed jobs in and still waits for them.
 
 Every server binds to `127.0.0.1` only. The credentials below are committed
 deliberately and must never be used anywhere real.

@@ -200,9 +200,12 @@ jobs:
       # ahead of the servers, so this returns once all four are answering and
       # their trees are in place.
       #
-      # The four are named because `--wait` with no names also waits on the
-      # seed jobs and reports their clean exit as a failure of the wait
-      # (`container ... exited (0)`, exit code 1). Naming these still pulls the
+      # The four are named to say which services the suite talks to, not
+      # because omitting them breaks: `--wait` with no names also waits on
+      # `minio-init` and `file-seed` and still exits 0, because chaining
+      # `file-seed` behind `minio-init` and the servers behind `file-seed` is
+      # what makes Compose read both one-shots as intentionally terminating
+      # rather than as containers that died. Naming these four still pulls the
       # seed jobs in as dependencies, and still waits for them.
       - run: docker compose up -d --build --wait minio sftp ftp webdav
 
