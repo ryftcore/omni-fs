@@ -139,11 +139,18 @@ credentials on first connect.
 | `omniFs.cache.ttlSeconds`              | `15`    | How long directory listings stay cached                     |
 | `omniFs.connection.idleTimeoutSeconds` | `300`   | Close an idle connection after this long; `0` keeps it open |
 | `omniFs.transfers.maxConcurrent`       | `4`     | Simultaneous transfers across all connections               |
-| `omniFs.logLevel`                      | `info`  | Verbosity of the **Omni-FS** output channel                 |
 
 ## Troubleshooting
 
-Set `omniFs.logLevel` to `debug` and open the **Omni-FS** output channel.
+Open the **Omni-FS** output channel, click the gear and choose **Set Log
+Level…**. The level applies at once and VS Code remembers it.
+
+- `info` — connects, disconnects and why (idle, edited, lost), and for FTP the
+  server greeting, negotiated TLS version and cipher.
+- `debug` — every operation with its timing, entry or byte count, cache miss,
+  and on failure the error code.
+- `trace` — also cache hits and, for FTP, the raw control channel (`> LIST`,
+  `< 226 …`). The password is written as `PASS ###`.
 
 S3-compatible servers disagree with AWS about error codes, so when reporting a
 problem please say which server you're using. Never paste credentials or an

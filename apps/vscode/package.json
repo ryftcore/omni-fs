@@ -254,7 +254,9 @@
             "error"
           ],
           "default": "info",
-          "description": "Verbosity of the Omni-FS output channel."
+          "description": "Verbosity of the Omni-FS output channel.",
+          "markdownDeprecationMessage": "No longer used. Omni-FS follows the level of its Output channel: open **Output → Omni-FS**, click the gear, and choose **Set Log Level…** (`debug` for per-operation timings, `trace` for the raw FTP control channel). VS Code remembers the choice.",
+          "deprecationMessage": "No longer used. Set the level on the Omni-FS Output channel instead (Output panel → gear → Set Log Level…)."
         }
       }
     },

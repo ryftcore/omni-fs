@@ -19,27 +19,38 @@ import type {
  * keeping `packages/*` free of host APIs.
  */
 
-const LEVEL_ORDER: Record<LogLevel, number> = {
-  trace: 0,
-  debug: 1,
-  info: 2,
-  warn: 3,
-  error: 4,
+/** Core's levels on VS Code's scale, where a higher number is more severe. */
+const VSCODE_LEVEL: Record<LogLevel, vscode.LogLevel> = {
+  trace: vscode.LogLevel.Trace,
+  debug: vscode.LogLevel.Debug,
+  info: vscode.LogLevel.Info,
+  warn: vscode.LogLevel.Warning,
+  error: vscode.LogLevel.Error,
 };
 
+/**
+ * The level is the channel's own — what the user picks with "Set Log Level…"
+ * in the Output panel, which VS Code persists and changes under a live logger.
+ * It is read on every call rather than cached, so a change applies at once,
+ * and a filtered line is dropped before its data is serialised.
+ *
+ * There is deliberately no second threshold here. A `LogOutputChannel` drops
+ * lines below its level whatever the caller asks, so a setting of our own could
+ * only ever narrow it — `debug` in a setting with the channel at `info` shows
+ * nothing, which is the trap the old `omniFs.logLevel` set.
+ */
 export class VsCodeLogger implements Logger {
   readonly #channel: vscode.LogOutputChannel;
   readonly #scope: string;
-  readonly #minLevel: LogLevel;
 
-  constructor(channel: vscode.LogOutputChannel, minLevel: LogLevel = 'info', scope = '') {
+  constructor(channel: vscode.LogOutputChannel, scope = '') {
     this.#channel = channel;
-    this.#minLevel = minLevel;
     this.#scope = scope;
   }
 
   log(level: LogLevel, message: string, data?: Record<string, unknown>): void {
-    if (LEVEL_ORDER[level] < LEVEL_ORDER[this.#minLevel]) return;
+    const threshold = this.#channel.logLevel;
+    if (threshold === vscode.LogLevel.Off || VSCODE_LEVEL[level] < threshold) return;
 
     const prefix = this.#scope === '' ? '' : `[${this.#scope}] `;
     const suffix = data === undefined ? '' : ` ${JSON.stringify(data)}`;
@@ -66,7 +77,7 @@ export class VsCodeLogger implements Logger {
 
   child(scope: string): Logger {
     const nested = this.#scope === '' ? scope : `${this.#scope}/${scope}`;
-    return new VsCodeLogger(this.#channel, this.#minLevel, nested);
+    return new VsCodeLogger(this.#channel, nested);
   }
 }
 

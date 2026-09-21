@@ -264,29 +264,34 @@ suite('VsCodeSecretStore', () => {
   });
 });
 
-/** Records the five level methods `VsCodeLogger` actually calls. */
-function fakeLogChannel(): {
-  readonly channel: vscode.LogOutputChannel;
+/**
+ * Records the five level methods `VsCodeLogger` actually calls, and carries a
+ * writable `logLevel` — the one other member it reads, and the one the user
+ * changes through the Output panel's "Set Log Level…".
+ */
+function fakeLogChannel(level: vscode.LogLevel = vscode.LogLevel.Info): {
+  readonly channel: vscode.LogOutputChannel & { logLevel: vscode.LogLevel };
   readonly lines: [LogLevel, string][];
 } {
   const lines: [LogLevel, string][] = [];
   const channel = {
+    logLevel: level,
     trace: (line: string) => lines.push(['trace', line]),
     debug: (line: string) => lines.push(['debug', line]),
     info: (line: string) => lines.push(['info', line]),
     warn: (line: string) => lines.push(['warn', line]),
     error: (line: string) => lines.push(['error', line]),
-    // `LogOutputChannel` has a dozen more members (append, show, logLevel,
+    // `LogOutputChannel` has a dozen more members (append, show,
     // onDidChangeLogLevel …) that this adapter never touches. Casting is
     // honest here: implementing them would assert nothing.
-  } as unknown as vscode.LogOutputChannel;
+  } as unknown as vscode.LogOutputChannel & { logLevel: vscode.LogLevel };
   return { channel, lines };
 }
 
 suite('VsCodeLogger', () => {
-  test('drops everything below the minimum level', async () => {
-    const { channel, lines } = fakeLogChannel();
-    const logger = new VsCodeLogger(channel, 'warn');
+  test("drops everything below the channel's own level", async () => {
+    const { channel, lines } = fakeLogChannel(vscode.LogLevel.Warning);
+    const logger = new VsCodeLogger(channel);
 
     logger.log('trace', 'no');
     logger.log('debug', 'no');
@@ -300,9 +305,33 @@ suite('VsCodeLogger', () => {
     );
   });
 
+  test('follows a level change at once, without a reload', async () => {
+    // What "Set Log Level…" in the Output panel does: VS Code changes the
+    // channel's level under a logger that already exists.
+    const { channel, lines } = fakeLogChannel(vscode.LogLevel.Info);
+    const logger = new VsCodeLogger(channel).child('conn-1');
+
+    logger.log('debug', 'hidden');
+    channel.logLevel = vscode.LogLevel.Trace;
+    logger.log('debug', 'shown');
+    logger.log('trace', 'shown too');
+
+    assert.deepEqual(
+      lines.map(([, line]) => line),
+      ['[conn-1] shown', '[conn-1] shown too'],
+    );
+  });
+
+  test('writes nothing when the channel is off', async () => {
+    const { channel, lines } = fakeLogChannel(vscode.LogLevel.Off);
+    new VsCodeLogger(channel).log('error', 'dropped');
+
+    assert.deepEqual(lines, []);
+  });
+
   test('appends structured data as JSON', async () => {
     const { channel, lines } = fakeLogChannel();
-    new VsCodeLogger(channel, 'info').log('info', 'connected', { providerId: 's3' });
+    new VsCodeLogger(channel).log('info', 'connected', { providerId: 's3' });
 
     assert.equal(lines[0]?.[1], 'connected {"providerId":"s3"}');
   });
@@ -311,17 +340,10 @@ suite('VsCodeLogger', () => {
     // `#resolve` calls `logger.child(connectionId)`, and ManagedFileSystem
     // passes it on again. A flat scope makes two connections' logs identical.
     const { channel, lines } = fakeLogChannel();
-    const logger = new VsCodeLogger(channel, 'info');
+    const logger = new VsCodeLogger(channel);
 
     logger.child('conn-1').child('transfer').log('info', 'started');
 
     assert.equal(lines[0]?.[1], '[conn-1/transfer] started');
-  });
-
-  test('a child inherits the minimum level', async () => {
-    const { channel, lines } = fakeLogChannel();
-    new VsCodeLogger(channel, 'error').child('conn-1').log('info', 'dropped');
-
-    assert.deepEqual(lines, []);
   });
 });

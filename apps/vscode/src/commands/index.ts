@@ -12,6 +12,7 @@ import type {
 } from '@omni-fs/core';
 import type { InitialSelection } from '@omni-fs/ui';
 import { OmniFileSystemProvider } from '../fs/omni-file-system-provider.js';
+import { describeError } from '../host/describe-error.js';
 import { ConnectionManagerPanel } from '../webview/connection-manager-panel.js';
 import type { ConnectionNode, ConnectionsTreeProvider } from '../views/connections-tree.js';
 
@@ -130,6 +131,9 @@ async function connectById(deps: CommandDeps, id: string, label: string): Promis
         // one control channel must not receive four parallel uploads.
         deps.transfers.setConnectionLimit(id, fs.capabilities.maxConcurrency);
       } catch (error) {
+        // The popup says what went wrong; the log keeps it, with the code, for
+        // after the popup is gone. The manager has already logged the cause.
+        deps.logger.log('error', 'Connect failed', { connectionId: id, ...describeError(error) });
         void vscode.window.showErrorMessage(
           `Omni-FS: ${error instanceof Error ? error.message : String(error)}`,
         );
@@ -191,6 +195,10 @@ async function mount(deps: CommandDeps, node?: ConnectionNode): Promise<void> {
   );
 
   if (!added) {
+    deps.logger.log('error', 'Could not add a connection to the workspace', {
+      connectionId: config.id,
+      uri: uri.toString(),
+    });
     void vscode.window.showErrorMessage(`Could not add "${config.label}" to the workspace.`);
   }
 }

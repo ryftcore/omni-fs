@@ -1,11 +1,5 @@
 import * as vscode from 'vscode';
-import {
-  ConnectionManager,
-  EntryCache,
-  ProviderRegistry,
-  TransferQueue,
-  type LogLevel,
-} from '@omni-fs/core';
+import { ConnectionManager, EntryCache, ProviderRegistry, TransferQueue } from '@omni-fs/core';
 import { ftpProvider } from '@omni-fs/provider-ftp';
 import { s3Provider } from '@omni-fs/provider-s3';
 import { sftpProvider } from '@omni-fs/provider-sftp';
@@ -53,7 +47,7 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
   const settings = vscode.workspace.getConfiguration('omniFs');
 
   const channel = vscode.window.createOutputChannel('Omni-FS', { log: true });
-  const logger = new VsCodeLogger(channel, settings.get<LogLevel>('logLevel', 'info'));
+  const logger = new VsCodeLogger(channel);
 
   // 1. Protocols. Adding a fifth is one import and one register call.
   const registry = new ProviderRegistry();
@@ -81,7 +75,13 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
 
   // 4. VS Code surfaces.
   const fileSystemProvider = new OmniFileSystemProvider({ manager, configStore, cache, logger });
-  const connectionsTree = new ConnectionsTreeProvider({ manager, configStore, registry, cache });
+  const connectionsTree = new ConnectionsTreeProvider({
+    manager,
+    configStore,
+    registry,
+    cache,
+    logger,
+  });
   const transfersTree = new TransfersTreeProvider(transfers);
   const decorations = new ConnectionDecorationProvider(configStore);
 

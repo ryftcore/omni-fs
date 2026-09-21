@@ -7,9 +7,11 @@ import type {
   ConnectionState,
   DirEntry,
   EntryCache,
+  Logger,
   ProviderRegistry,
 } from '@omni-fs/core';
 import { OmniFileSystemProvider } from '../fs/omni-file-system-provider.js';
+import { describeError } from '../host/describe-error.js';
 
 export type ConnectionNode =
   | { readonly kind: 'connection'; readonly config: ConnectionConfig }
@@ -34,6 +36,7 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
   readonly #configStore: ConfigStore;
   readonly #registry: ProviderRegistry;
   readonly #cache: EntryCache;
+  readonly #logger: Logger;
   readonly #emitter = new vscode.EventEmitter<ConnectionNode | undefined>();
 
   readonly onDidChangeTreeData = this.#emitter.event;
@@ -43,11 +46,13 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
     configStore: ConfigStore;
     registry: ProviderRegistry;
     cache: EntryCache;
+    logger: Logger;
   }) {
     this.#manager = options.manager;
     this.#configStore = options.configStore;
     this.#registry = options.registry;
     this.#cache = options.cache;
+    this.#logger = options.logger;
 
     this.#manager.onDidChangeState(() => this.refresh());
     this.#configStore.onDidChange(() => this.refresh());
@@ -87,14 +92,30 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
       return [];
     }
 
+    const started = Date.now();
     try {
       const fs = await this.#manager.acquire(connectionId);
       const children: ConnectionNode[] = [];
       for await (const entry of fs.list(path)) {
         children.push({ kind: 'entry', connectionId, entry });
       }
-      return children.sort(compareEntries);
+      const sorted = children.sort(compareEntries);
+      // Every expand, collapse-and-reopen and refresh of an open folder comes
+      // through here, so a folder that keeps reloading shows up as a run of
+      // these lines.
+      this.#logger.log('debug', 'Tree expanded', {
+        connectionId,
+        path: path.value,
+        entries: sorted.length,
+        ms: Date.now() - started,
+      });
+      return sorted;
     } catch (error) {
+      this.#logger.log('error', 'Tree could not list a folder', {
+        connectionId,
+        path: path.value,
+        ...describeError(error),
+      });
       void vscode.window.showErrorMessage(
         `Omni-FS: could not list ${path.value} — ${error instanceof Error ? error.message : String(error)}`,
       );

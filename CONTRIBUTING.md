@@ -130,7 +130,8 @@ checks that the Open VSX token can publish, and publishes nothing.
 
 Please include the protocol and server software (AWS S3 vs MinIO vs R2 matters —
 they disagree on error codes), what you expected, what happened, and the
-relevant part of the **Omni-FS** output channel with `omniFs.logLevel` set to
-`debug`.
+relevant part of the **Omni-FS** output channel at the `debug` level (Output
+panel → **Omni-FS** → gear → **Set Log Level…**). For an FTP problem, `trace`
+adds the raw control channel; the password is masked in it.
 
 Never paste credentials or a full endpoint URL containing one.

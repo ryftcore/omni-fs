@@ -3,6 +3,25 @@
 Odd minor versions (0.1.x, 0.3.x) are pre-releases; even minor versions are
 stable.
 
+## Unreleased
+
+### Fixed
+
+- **FTPS to a TLS 1.0 server inside VS Code.** Choosing TLS 1.0 or 1.1 as the
+  minimum version failed with "Unknown error" before a byte reached the server:
+  VS Code's TLS library (BoringSSL) rejects the cipher setting that plain
+  Node.js needs for those servers. It is now applied only where it is
+  understood.
+
+### Changed
+
+- **Logging follows the Omni-FS output channel's own level** (Output panel →
+  gear → Set Log Level…), applies without a reload, and says more: connects
+  and disconnects with the reason, FTP's negotiated TLS version and cipher,
+  per-operation timings at `debug`, and the raw FTP control channel at
+  `trace`. `omniFs.logLevel` is deprecated — it could only ever hide lines,
+  because the channel dropped anything below its own level first.
+
 ## 0.1.2
 
 No change in behaviour from 0.1.1.
