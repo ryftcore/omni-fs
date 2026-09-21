@@ -1,10 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { RemotePath } from '@omni-fs/core';
+import { describe, expect, it, vi } from 'vitest';
+import { RemotePath, collectStream, streamFrom } from '@omni-fs/core';
 import {
   buildRange,
   fromFileInfo,
   joinRemote,
   parseMlstResponse,
+  releasingStream,
   resolveBase,
   toDirEntry,
   toFileStat,
@@ -182,5 +183,77 @@ describe('parseMlstResponse', () => {
     // The entry is still usable — type and name are what a listing needs — so
     // one bad fact does not cost the whole answer.
     expect(parseMlstResponse('250-x\n type=file;size=lots; /data/a\n250 End')?.size).toBe(0);
+  });
+});
+
+describe('releasingStream', () => {
+  it('releases once the source is drained', async () => {
+    const release = vi.fn();
+    const stream = releasingStream(streamFrom(new TextEncoder().encode('hello')), release);
+    expect(new TextDecoder().decode(await collectStream(stream))).toBe('hello');
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('releases when the consumer walks away', async () => {
+    // A tree view that closes a preview halfway through must not strand a
+    // control channel for the life of the connection.
+    const release = vi.fn();
+    const stream = releasingStream(streamFrom(new Uint8Array([1, 2, 3])), release);
+    await stream.cancel('done looking');
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('releases when the source fails', async () => {
+    const release = vi.fn();
+    const failing = new ReadableStream<Uint8Array>({
+      pull() {
+        throw new Error('connection lost');
+      },
+    });
+    await expect(collectStream(releasingStream(failing, release))).rejects.toThrow(
+      'connection lost',
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('releases exactly once however the stream ends', async () => {
+    const release = vi.fn();
+    const stream = releasingStream(streamFrom(new Uint8Array([1])), release);
+    await collectStream(stream);
+    await stream.cancel().catch(() => undefined);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it('releases exactly once when a cancel lands on an in-flight read', async () => {
+    // The race the single-release guard actually exists for: `cancel` releases
+    // and then cancels the reader, which resolves the read already in flight
+    // with `done` — so the pull continuation reaches the drained path as well.
+    // A second release there would hand one control channel to two callers.
+    const release = vi.fn();
+    let unblock = (): void => undefined;
+    let reached = (): void => undefined;
+    const pulling = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    const slow = new ReadableStream<Uint8Array>({
+      pull(): Promise<void> {
+        reached();
+        return new Promise<void>((resolve) => {
+          unblock = resolve;
+        });
+      },
+    });
+    const reader = releasingStream(slow, release).getReader();
+    const reading = reader.read();
+    // Waiting for the source to be pulled is what puts the wrapper's own pull
+    // in flight. Cancelling before that reaches a stream that never pulled, and
+    // the race the guard exists for never happens.
+    await pulling;
+
+    await reader.cancel('changed my mind');
+    unblock();
+    await reading.catch(() => undefined);
+
+    expect(release).toHaveBeenCalledOnce();
   });
 });

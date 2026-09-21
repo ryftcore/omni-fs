@@ -1,4 +1,4 @@
-import { OmniFsError } from '@omni-fs/core';
+import { OmniFsError, collectStream, streamFrom } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -13,8 +13,15 @@ import type {
 } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import { FtpControlChannel } from './ftp-channel.js';
-import type { FtpChannel, OpenChannel } from './ftp-channel.js';
-import { joinRemote, resolveBase, toDirEntry, toFileStat } from './ftp-helpers.js';
+import type { FtpChannel, FtpTransferOptions, OpenChannel } from './ftp-channel.js';
+import {
+  buildRange,
+  joinRemote,
+  releasingStream,
+  resolveBase,
+  toDirEntry,
+  toFileStat,
+} from './ftp-helpers.js';
 import { FtpPool } from './ftp-pool.js';
 import { readSettings } from './settings.js';
 import type { FtpSettings } from './settings.js';
@@ -151,15 +158,43 @@ export class FtpFileSystem implements RemoteFileSystem {
     for (const entry of entries) yield toDirEntry(entry, path);
   }
 
-  async readFile(_path: RemotePath, _options?: ReadOptions): Promise<Uint8Array> {
-    throw notImplemented('readFile');
+  async readFile(path: RemotePath, options?: ReadOptions): Promise<Uint8Array> {
+    return collectStream(await this.createReadStream(path, options));
   }
 
   async createReadStream(
-    _path: RemotePath,
-    _options?: ReadOptions,
+    path: RemotePath,
+    options?: ReadOptions,
   ): Promise<ReadableStream<Uint8Array>> {
-    throw notImplemented('createReadStream');
+    const range = buildRange(options);
+    const signal = options?.signal;
+
+    if (range === 'empty') {
+      // No protocol has a spelling for "zero bytes", and answering it locally
+      // must not turn a missing path into an empty success — so existence
+      // stays the server's to decide. The same shape, and the same reasoning,
+      // as the other three providers.
+      await this.stat(path, signal);
+      return streamFrom(new Uint8Array());
+    }
+
+    const pool = this.#requirePool();
+    const channel = await pool.acquire(signal);
+    try {
+      const stream = await channel.openReadStream(
+        this.#remote(path),
+        range,
+        this.#transferOptions(options),
+      );
+      // The lease outlives this call: a read is only finished when its stream
+      // is, and every way out of that stream has to hand the channel back.
+      return releasingStream(stream, () => {
+        pool.release(channel);
+      });
+    } catch (error) {
+      pool.release(channel);
+      throw toOmniFsError(error, path.value);
+    }
   }
 
   async writeFile(_path: RemotePath, _data: Uint8Array, _options?: WriteOptions): Promise<void> {
@@ -213,6 +248,18 @@ export class FtpFileSystem implements RemoteFileSystem {
 
   #remote(path: RemotePath): string {
     return joinRemote(this.#base, path);
+  }
+
+  /**
+   * `exactOptionalPropertyTypes` is why these are conditional spreads rather
+   * than two assignments: `FtpTransferOptions.signal` may be absent, and an
+   * explicit `undefined` is not the same thing.
+   */
+  #transferOptions(options: ReadOptions | WriteOptions | undefined): FtpTransferOptions {
+    return {
+      ...(options?.signal !== undefined ? { signal: options.signal } : {}),
+      ...(options?.onProgress !== undefined ? { onProgress: options.onProgress } : {}),
+    };
   }
 
   #requirePool(): FtpPool {

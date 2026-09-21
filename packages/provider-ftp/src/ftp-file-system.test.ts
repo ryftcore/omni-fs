@@ -14,6 +14,8 @@ interface FakeChannelOptions {
   readonly hasMlst?: boolean;
   readonly mlst?: (path: string) => Promise<FtpEntry | undefined>;
   readonly list?: (path: string) => Promise<readonly FtpEntry[]>;
+  /** Served by `openReadStream`, honouring `start` and `length`. */
+  readonly content?: string;
 }
 
 function entry(name: string, overrides: Partial<FtpEntry> = {}): FtpEntry {
@@ -58,7 +60,23 @@ function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
     rename: async (from, to) => {
       calls.push(`rename ${from} ${to}`);
     },
-    openReadStream: async () => new ReadableStream<Uint8Array>(),
+    openReadStream: async (path, range, transfer) => {
+      calls.push(`read ${path} ${range?.start ?? 0}:${range?.length ?? ''}`);
+      const body = options.content ?? '';
+      const start = range?.start ?? 0;
+      const slice =
+        range?.length === undefined ? body.slice(start) : body.slice(start, start + range.length);
+      // Mirrors the real channel: the protocol has no end-of-range, so cutting
+      // a RETR short leaves the control channel mid-command.
+      if (range?.length !== undefined) channel.poison();
+      transfer?.onProgress?.(slice.length);
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(slice));
+          controller.close();
+        },
+      });
+    },
     upload: async (path) => {
       calls.push(`upload ${path}`);
     },
@@ -254,6 +272,134 @@ describe('list', () => {
 
     // If the lease were still held this would deadlock at a ceiling of one.
     await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  });
+});
+
+describe('reading', () => {
+  it('reads a whole file', async () => {
+    const fs = await connected(fakeChannel({ content: 'payload' }));
+    expect(new TextDecoder().decode(await fs.readFile(RemotePath.parse('/a.txt')))).toBe('payload');
+  });
+
+  it('reads a byte range', async () => {
+    const fs = await connected(fakeChannel({ content: '0123456789' }));
+    const slice = await fs.readFile(RemotePath.parse('/a.txt'), { offset: 2, length: 3 });
+    expect(new TextDecoder().decode(slice)).toBe('234');
+  });
+
+  it('reads from an offset to the end', async () => {
+    const fs = await connected(fakeChannel({ content: '0123456789' }));
+    const slice = await fs.readFile(RemotePath.parse('/a.txt'), { offset: 7 });
+    expect(new TextDecoder().decode(slice)).toBe('789');
+  });
+
+  it('reads no bytes for a zero-length range, without opening a data connection', async () => {
+    const channel = fakeChannel({ content: '0123456789', mlst: async () => entry('a.txt') });
+    const fs = await connected(channel);
+    const slice = await fs.readFile(RemotePath.parse('/a.txt'), { offset: 2, length: 0 });
+    expect(slice.byteLength).toBe(0);
+    expect(channel.calls.some((call) => call.startsWith('read'))).toBe(false);
+    // It still asked the server whether the path is there, which is what keeps
+    // the answer from being an empty success over a file that does not exist.
+    expect(channel.calls).toContain('mlst /home/alice/a.txt');
+  });
+
+  it('still refuses a missing path for a zero-length range', async () => {
+    // Answering locally must not turn a missing path into an empty success.
+    // Existence stays the server's to decide.
+    const channel = fakeChannel({ hasMlst: false, list: async () => [] });
+    const fs = await connected(channel);
+    await expect(
+      fs.readFile(RemotePath.parse('/absent.txt'), { offset: 0, length: 0 }),
+    ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'NotFound');
+  });
+
+  // At a ceiling of one the follow-up stat would deadlock if the read kept its
+  // lease, so these three carry a timeout: the failure has to be a red test
+  // rather than a hung suite.
+  it('releases the channel once the stream is drained', async () => {
+    const fs = await connected(fakeChannel({ content: 'payload' }), { maxConnections: 1 });
+    await fs.readFile(RemotePath.parse('/a.txt'));
+    await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  }, 2_000);
+
+  it('releases the channel when the consumer cancels early', async () => {
+    const fs = await connected(fakeChannel({ content: 'payload' }), { maxConnections: 1 });
+    const stream = await fs.createReadStream(RemotePath.parse('/a.txt'));
+    await stream.cancel('changed my mind');
+    await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  }, 2_000);
+
+  it('releases the channel when the read cannot even start', async () => {
+    const channel = fakeChannel({ content: 'payload' });
+    channel.openReadStream = async () => {
+      throw Object.assign(new Error('550 No such file'), { code: 550 });
+    };
+    const fs = await connected(channel, { maxConnections: 1 });
+    await expect(fs.readFile(RemotePath.parse('/gone.txt'))).rejects.toThrow();
+    await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  }, 2_000);
+
+  it('translates a failure to start into an OmniFsError', async () => {
+    // Providers throw one error vocabulary: a raw 550 from the library must not
+    // reach a caller as whatever `basic-ftp` happened to construct.
+    const channel = fakeChannel({ content: 'payload' });
+    channel.openReadStream = async () => {
+      throw Object.assign(new Error('550 No such file'), { code: 550 });
+    };
+    const fs = await connected(channel);
+    await expect(fs.readFile(RemotePath.parse('/gone.txt'))).rejects.toSatisfy(
+      (error: unknown) =>
+        OmniFsError.is(error) && error.code === 'NotFound' && error.path === '/gone.txt',
+    );
+  });
+
+  it('replaces the channel a bounded read poisoned', async () => {
+    // The protocol has no end-of-range, so a range that stops before EOF costs
+    // the control channel. The pool notices on release and opens a fresh one.
+    const opened: FakeChannel[] = [];
+    const fs = new FtpFileSystem(context({ maxConnections: 1 }), async () => {
+      const channel = fakeChannel({ content: '0123456789' });
+      opened.push(channel);
+      return channel;
+    });
+    await fs.connect();
+
+    await fs.readFile(RemotePath.parse('/a.txt'), { offset: 0, length: 4 });
+    await fs.stat(RemotePath.ROOT);
+
+    expect(opened.length).toBe(2);
+  }, 2_000);
+
+  it('does not poison the channel for an unbounded read', async () => {
+    const opened: FakeChannel[] = [];
+    const fs = new FtpFileSystem(context({ maxConnections: 1 }), async () => {
+      const channel = fakeChannel({ content: '0123456789' });
+      opened.push(channel);
+      return channel;
+    });
+    await fs.connect();
+
+    await fs.readFile(RemotePath.parse('/a.txt'));
+    await fs.stat(RemotePath.ROOT);
+
+    expect(opened.length).toBe(1);
+  }, 2_000);
+
+  it('reports progress as bytes arrive', async () => {
+    const seen: number[] = [];
+    const fs = await connected(fakeChannel({ content: 'payload' }));
+    await fs.readFile(RemotePath.parse('/a.txt'), { onProgress: (n) => seen.push(n) });
+    expect(seen.at(-1)).toBe(7);
+  });
+
+  it("carries the caller's abort signal down to the channel", async () => {
+    const fs = await connected(fakeChannel({ content: 'payload' }));
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      fs.readFile(RemotePath.parse('/a.txt'), { signal: controller.signal }),
+    ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled');
   });
 });
 

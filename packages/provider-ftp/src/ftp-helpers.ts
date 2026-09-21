@@ -209,3 +209,45 @@ function normalise(value: string): string {
   const collapsed = trimTrailingSlashes(`/${value}`.replace(/\/+/g, '/'));
   return collapsed === '' ? '/' : collapsed;
 }
+
+/**
+ * Hands a control channel back when the stream it belongs to is finished with.
+ *
+ * A read outlives the call that started it, so it cannot sit inside a
+ * `lease()`. Every way out — drained, cancelled, failed — has to release
+ * exactly once, or a connection at the default ceiling of one channel
+ * deadlocks on its next operation.
+ */
+export function releasingStream(
+  source: ReadableStream<Uint8Array>,
+  onDone: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = source.getReader();
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    onDone();
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          release();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      } catch (error) {
+        release();
+        throw error;
+      }
+    },
+    cancel(reason) {
+      release();
+      return reader.cancel(reason);
+    },
+  });
+}
