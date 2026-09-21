@@ -1,10 +1,14 @@
 # Local test servers
 
 ```bash
-docker compose up -d      # start (first run builds the SFTP image)
-docker compose ps         # check
-docker compose down -v    # stop and delete all test data
+docker compose up -d --build   # start (the SFTP and FTP images are built here)
+docker compose ps              # check
+docker compose down -v         # stop and delete all test data
 ```
+
+`--build` is worth typing: two of the four servers are built from
+`docker/sftp/` and `docker/ftp/` rather than pulled, so a change to either
+Dockerfile is otherwise ignored.
 
 Every server binds to `127.0.0.1` only. The credentials below are committed
 deliberately and must never be used anywhere real.
@@ -20,29 +24,22 @@ docs/guide.md
 docs/nested/deep/deep.txt
 ```
 
-## What you can actually test today
-
-`provider-s3`, `provider-webdav` and `provider-sftp` are implemented. FTP still
-throws `Unsupported` from `connect()`, so **Test Connection will fail for it**
-with "… is not implemented yet". That is the correct result, and it is still
-worth running: it exercises the probe path, the error mapping and the form's
-error display. Browsing files works on S3, WebDAV and SFTP.
-
-The FTP server is here so that provider can be written against something real.
-
 ## Conformance suite
 
 With the stack up, the shared behavioural contract runs against the live
 servers:
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 pnpm test:conformance
 ```
 
-`packages/provider-s3`, `packages/provider-webdav` and `packages/provider-sftp`
-all define the script, so all three run. A provider is finished exactly when
-this passes for it.
+All four provider packages define the script, so all four run — and
+`packages/provider-ftp` runs the whole contract four times over, once per
+listener below. A provider is finished exactly when this passes for it.
+
+CI runs the same command in the `conformance (live)` job, on Linux only,
+against `docker compose up -d --build`.
 
 Every case makes its own `/conformance-<timestamp>-<n>` directory and removes
 it again, so the seeded tree above is what a `PROPFIND` should show both before
@@ -88,17 +85,51 @@ Console at <http://localhost:9001> (`omnifs` / `omnifs-dev-secret`).
 | Secret access key           | `omnifs-dev-secret`                                      |
 | Session token               | leave empty                                              |
 
-## FTP
+## FTP / FTPS — vsftpd
 
-| Field      | Value                                                      |
-| ---------- | ---------------------------------------------------------- |
-| Host       | `localhost`                                                |
-| Port       | `2121`                                                     |
-| Username   | `omnifs`                                                   |
-| Encryption | **Plain FTP — unencrypted** — this container serves no TLS |
-| Password   | `omnifs-dev-secret`                                        |
+One container, three listeners, all serving the same `/data` volume as the same
+user. Which one you point at decides which encryption mode you are testing:
 
-Passive data ports 21000-21010 are published; without them listings hang.
+| Port   | Encryption setting                              | What it is for                                            |
+| ------ | ----------------------------------------------- | --------------------------------------------------------- |
+| `2121` | **Plain FTP** _or_ **explicit TLS (AUTH TLS)**  | Both, on one listener: TLS is offered, not forced         |
+| `2990` | **Implicit TLS**                                | TLS on connect, no `AUTH` negotiation                     |
+| `2100` | **Explicit TLS** with minimum TLS version `1.0` | A 2012-era server — the target `tlsMinVersion` exists for |
+
+| Field                          | Value                                               |
+| ------------------------------ | --------------------------------------------------- |
+| Host                           | `localhost`                                         |
+| Port                           | `2121`, `2990` or `2100` — see above                |
+| Username                       | `omnifs`                                            |
+| Password                       | `omnifs-dev-secret`                                 |
+| Allow self-signed certificates | **checked** — the certificate is generated at build |
+| Root prefix                    | `/data`                                             |
+
+The certificate is a self-signed `CN=localhost` made in the Dockerfile, so a
+connection that leaves **Allow self-signed certificates** unticked is refused,
+and the error names that setting. That is the correct result and worth seeing
+once.
+
+Files live under `/data`, which is also the login directory, so the root prefix
+can be written either way: `/data` as an absolute server path, or left empty to
+land in the login directory. The container is deliberately not chrooted, so the
+server's filesystem root stays reachable and an absolute prefix names something
+real. `docs` is a relative prefix that scopes the connection one level down.
+
+`2100` accepts **only** TLS 1.0: raise the minimum TLS version against it and
+the handshake is refused, which is what proves the setting reaches the socket.
+Lowering the floor below TLS 1.2 also relaxes the cipher policy, because
+OpenSSL 3 otherwise refuses the key sizes such a server offers.
+
+Passive data ports 21000-21032 are published — eleven per listener — and without
+them listings hang.
+
+Known gap, stated rather than hidden: `require_ssl_reuse` is **off** on all
+three listeners, so **nothing here covers a server that demands TLS session
+reuse on the data connection**. See `docker/ftp/vsftpd-common.conf`. vsftpd
+3.0.5 also implements no `MLST`/`MLSD`, so `stat` here always answers from a
+parent `LIST` — and consequently reports no modification time, which is the
+provider declining to guess a timezone rather than a defect.
 
 ## SFTP
 
@@ -111,9 +142,10 @@ Passive data ports 21000-21010 are published; without them listings hang.
 | Password       | `omnifs-dev-secret` |
 | Root prefix    | `/data`             |
 
-Files live under `/data`, so the root prefix is absolute — the one provider where
-that form is the common one. Leave it empty and the connection starts in the
-account's home directory instead, which is empty on this image.
+Files live under `/data`, so the root prefix is absolute — the form this
+provider and FTP share, and that S3 and WebDAV have no use for. Leave it empty
+and the connection starts in the account's home directory instead, which is
+empty on this image.
 
 Host keys: the provider reads `~/.ssh/known_hosts` and refuses a host listed
 there with a different key of the same type. `localhost:2222` is normally
@@ -135,9 +167,12 @@ are amd64-only, so they emulate on Apple Silicon.
 
 ## Ports
 
-| Port              | Service                    |
-| ----------------- | -------------------------- |
-| 9000 / 9001       | MinIO API / console        |
-| 2121, 21000-21010 | FTP control / passive data |
-| 2222              | SFTP                       |
-| 8081              | WebDAV                     |
+| Port        | Service                               |
+| ----------- | ------------------------------------- |
+| 9000 / 9001 | MinIO API / console                   |
+| 2121        | FTP control — plain and explicit TLS  |
+| 2990        | FTP control — implicit TLS            |
+| 2100        | FTP control — TLS 1.0 only            |
+| 21000-21032 | FTP passive data, for all three above |
+| 2222        | SFTP                                  |
+| 8081        | WebDAV                                |

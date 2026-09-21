@@ -12,9 +12,10 @@ Browse, edit and transfer remote files without leaving your editor.
 
 ---
 
-> **Status: beta.** The architecture, core, S3 provider, WebDAV provider and
-> SFTP provider are in place; FTP is scaffolded but not yet implemented. The
-> published release, `v0.1.0-beta.1`, predates WebDAV and ships S3 alone — see
+> **Status: beta.** The architecture, core and all four providers — S3, WebDAV,
+> SFTP and FTP/FTPS — are in place, and each passes the shared conformance suite
+> against a real server of its protocol in CI. The published release,
+> `v0.1.0-beta.1`, predates WebDAV and ships S3 alone — see
 > [Roadmap](#roadmap) and the
 > [extension changelog](apps/vscode/CHANGELOG.md).
 
@@ -36,16 +37,18 @@ instead of hiding them: every provider **declares what it can actually do**, and
 a shared layer fills the gaps consistently.
 
 S3 has no directories, so "New Folder" does nothing until you put a file in it.
-FTP allows one operation at a time, so bulk uploads serialise while the same
-upload to S3 fans out sixteen ways. You do not have to know any of that — but
-the software does, and it behaves correctly because of it.
+FTP carries one command per control connection, so the provider opens a pool of
+them — how many is a per-connection setting, defaulting to one, which is why
+bulk uploads serialise out of the box while the same upload to S3 fans out
+sixteen ways. You do not have to know any of that — but the software does, and
+it behaves correctly because of it.
 
 ## Supported storage
 
 | Protocol               | Status         | Notes                                                                 |
 | ---------------------- | -------------- | --------------------------------------------------------------------- |
 | **S3 / S3-compatible** | ✅ Implemented | AWS S3, MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Ceph |
-| **FTP / FTPS**         | 🚧 Scaffolded  | Explicit and implicit TLS                                             |
+| **FTP / FTPS**         | ✅ Implemented | Explicit and implicit TLS, configurable minimum TLS version           |
 | **SFTP (SSH)**         | ✅ Implemented | Password, private key, SSH agent                                      |
 | **WebDAV**             | ✅ Implemented | Nextcloud, ownCloud                                                   |
 
@@ -110,11 +113,11 @@ so that mixing them up is a compile error.
 - [x] S3 / S3-compatible provider
 - [x] VS Code `FileSystemProvider`, connections tree, transfers view
 - [x] VS Code extension tested in a real extension host, hermetic and live
-- [ ] FTP / FTPS provider
+- [x] FTP / FTPS provider
 - [x] SFTP provider
 - [x] WebDAV provider
 - [ ] Download / upload wired to the local filesystem
-- [ ] Conformance suite running against containers in CI
+- [x] Conformance suite running against containers in CI
 - [ ] Desktop app (Electron)
 
 ## Contributing

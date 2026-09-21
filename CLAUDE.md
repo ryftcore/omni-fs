@@ -18,9 +18,9 @@ pnpm test:extension:live   # + the compose stack, against the minified bundle
 ```
 
 CI runs `build && typecheck && lint && test` on Linux, macOS and Windows, and
-`test:extension` on those same three; `test:extension:live` needs the compose
-stack, so it runs on Linux alone. `format:check` and the commit-title check are
-in a separate workflow.
+`test:extension` on those same three; `test:extension:live` and
+`test:conformance` both need the compose stack, so they run on Linux alone.
+`format:check` and the commit-title check are in a separate workflow.
 
 Single test:
 
@@ -29,8 +29,7 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
-`provider-ftp` is the only package without tests. `apps/vscode` is tested
-separately: `pnpm test:extension` boots the real extension inside an Electron
+Every package has tests. `apps/vscode` is tested separately: `pnpm test:extension` boots the real extension inside an Electron
 extension host and drives `vscode.workspace.fs` over an in-memory provider, and
 `pnpm test:extension:live` runs the _minified_ production bundle against the
 `compose.yaml` servers — the only thing that proves esbuild did not break a
@@ -84,7 +83,8 @@ Do not implement one and declare the capability false, or vice versa.
 **`ProviderCapabilities`** is how protocols are allowed to differ honestly.
 Callers check it instead of calling and interpreting a failure; the UI greys
 out actions in advance, and `TransferQueue` reads `maxConcurrency` so FTP's
-single control channel serialises while S3 fans out sixteen ways. Adding a
+control-channel pool — one connection unless the user raises it — serialises
+while S3 fans out sixteen ways. Adding a
 capability defaults to "no" for existing providers via `MINIMAL_CAPABILITIES`.
 
 **`ManagedFileSystem`** (`packages/core/src/fs/`) decorates a raw provider and
@@ -191,8 +191,7 @@ than `tsc` because they import `@omni-fs/testing`, which is ESM-only.
 
 ## Current state
 
-S3, WebDAV and SFTP are implemented; FTP is a deliberate skeleton:
-capabilities and schemas declared, methods throwing `Unsupported`. Every
+All four protocols are implemented: S3, WebDAV, SFTP and FTP/FTPS. Every
 provider declares `canWatch: false` — no protocol here has change notification
 worth the name — and core does **not** poll to make up for it: both
 `ManagedFileSystem.watch` and the extension's `watch` are deliberate no-ops, on
@@ -200,4 +199,10 @@ the grounds that background listings against a metered bucket are a cost the
 user did not ask for. Refresh is explicit. Download/upload commands are stubs —
 the queue, retry and progress already exist in core; only the local-file half
 is missing. `pnpm test:conformance` runs the shared suite against the live
-servers in `compose.yaml`; S3, WebDAV and SFTP all implement it.
+servers in `compose.yaml` and all four pass it, FTP four times over — plain,
+explicit TLS, implicit TLS and TLS 1.0 against the legacy listener. CI runs
+that command in the Linux-only `conformance (live)` job.
+
+FTP is the one provider whose `maxConcurrency` comes from a _setting_ rather
+than the protocol: the control channel carries one command, so `FtpPool` opens
+up to `maxConnections` logins, defaulting to 1.
