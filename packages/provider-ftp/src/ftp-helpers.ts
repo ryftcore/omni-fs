@@ -251,3 +251,46 @@ export function releasingStream(
     },
   });
 }
+
+/**
+ * The write-side twin of `releasingStream`. A write stream's lease ends when
+ * the stream does — on `close()`, on `abort()`, or on a failed write — and
+ * exactly once either way.
+ */
+export function releasingWritable(
+  target: WritableStream<Uint8Array>,
+  onDone: () => void,
+): WritableStream<Uint8Array> {
+  const writer = target.getWriter();
+  let released = false;
+  const release = (): void => {
+    if (released) return;
+    released = true;
+    onDone();
+  };
+
+  return new WritableStream<Uint8Array>({
+    async write(chunk) {
+      try {
+        await writer.write(chunk);
+      } catch (error) {
+        release();
+        throw error;
+      }
+    },
+    async close() {
+      try {
+        await writer.close();
+      } finally {
+        release();
+      }
+    },
+    async abort(reason) {
+      try {
+        await writer.abort(reason);
+      } finally {
+        release();
+      }
+    },
+  });
+}

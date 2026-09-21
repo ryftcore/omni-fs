@@ -1,4 +1,4 @@
-import { OmniFsError, collectStream, streamFrom } from '@omni-fs/core';
+import { OmniFsError, RemotePath, collectStream, streamFrom } from '@omni-fs/core';
 import type {
   DeleteOptions,
   DirEntry,
@@ -8,16 +8,16 @@ import type {
   ProviderContext,
   ReadOptions,
   RemoteFileSystem,
-  RemotePath,
   WriteOptions,
 } from '@omni-fs/core';
-import { toOmniFsError } from './errors.js';
+import { isReplyCode, toOmniFsError } from './errors.js';
 import { FtpControlChannel } from './ftp-channel.js';
 import type { FtpChannel, FtpTransferOptions, OpenChannel } from './ftp-channel.js';
 import {
   buildRange,
   joinRemote,
   releasingStream,
+  releasingWritable,
   resolveBase,
   toDirEntry,
   toFileStat,
@@ -197,8 +197,50 @@ export class FtpFileSystem implements RemoteFileSystem {
     }
   }
 
-  async writeFile(_path: RemotePath, _data: Uint8Array, _options?: WriteOptions): Promise<void> {
-    throw notImplemented('writeFile');
+  async writeFile(path: RemotePath, data: Uint8Array, options?: WriteOptions): Promise<void> {
+    const signal = options?.signal;
+    await this.#requirePool().lease(async (channel) => {
+      await this.#prepareWrite(channel, path, options, signal);
+      await channel.upload(this.#remote(path), data, this.#transferOptions(options));
+    }, signal);
+  }
+
+  async createWriteStream(
+    path: RemotePath,
+    options?: WriteOptions,
+  ): Promise<WritableStream<Uint8Array>> {
+    const signal = options?.signal;
+    const pool = this.#requirePool();
+    const channel = await pool.acquire(signal);
+    try {
+      await this.#prepareWrite(channel, path, options, signal);
+      const stream = await channel.openWriteStream(
+        this.#remote(path),
+        this.#transferOptions(options),
+      );
+      return releasingWritable(stream, () => pool.release(channel));
+    } catch (error) {
+      pool.release(channel);
+      throw toOmniFsError(error, path.value);
+    }
+  }
+
+  async createDirectory(path: RemotePath, signal?: AbortSignal): Promise<void> {
+    await this.#requirePool().lease(async (channel) => {
+      await this.#mkdirp(channel, path, signal);
+      // `MKD` on something that already exists is swallowed above, matching
+      // `MemoryFileSystem` — the contract's reference implementation. A *file*
+      // in the way is `AlreadyExists`, and only a stat can tell which it was.
+      const stat = await this.#stat(channel, path, signal);
+      if (stat.type !== 'directory') {
+        throw new OmniFsError({
+          code: 'AlreadyExists',
+          message: `Already exists: ${path.value}`,
+          path: path.value,
+          providerId: 'ftp',
+        });
+      }
+    }, signal);
   }
 
   async delete(_path: RemotePath, _options?: DeleteOptions): Promise<void> {
@@ -248,6 +290,76 @@ export class FtpFileSystem implements RemoteFileSystem {
 
   #remote(path: RemotePath): string {
     return joinRemote(this.#base, path);
+  }
+
+  async #prepareWrite(
+    channel: FtpChannel,
+    path: RemotePath,
+    options: WriteOptions | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    if (options?.createParents !== false) await this.#mkdirp(channel, path.parent, signal);
+    if (options?.overwrite === false) await this.#refuseIfPresent(channel, path, signal);
+  }
+
+  /**
+   * FTP has no exclusive create. `STOR` truncates whatever is there, and there
+   * is no flag, no `If-None-Match` and no `wx` — so this is check-then-act,
+   * with a race window of one round trip. SFTP got this for free from a `wx`
+   * open and WebDAV from `If-None-Match`; this provider cannot, and the
+   * difference is written down here rather than hidden behind a method that
+   * looks identical from the outside.
+   */
+  async #refuseIfPresent(
+    channel: FtpChannel,
+    path: RemotePath,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    if (!(await this.#exists(channel, path, signal))) return;
+    throw new OmniFsError({
+      code: 'AlreadyExists',
+      message: `Already exists: ${path.value}`,
+      path: path.value,
+      providerId: 'ftp',
+    });
+  }
+
+  async #exists(
+    channel: FtpChannel,
+    path: RemotePath,
+    signal: AbortSignal | undefined,
+  ): Promise<boolean> {
+    try {
+      await this.#stat(channel, path, signal);
+      return true;
+    } catch (error) {
+      if (OmniFsError.is(error) && error.code === 'NotFound') return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Creates the ancestor chain with absolute `MKD`s.
+   *
+   * Not `basic-ftp`'s `ensureDir`, which is built on `CWD` and would leave a
+   * pooled channel somewhere the next lease does not expect. An existing
+   * directory is success: servers answer 550 or 521 for it and disagree about
+   * which, so neither can be read as a failure here.
+   */
+  async #mkdirp(
+    channel: FtpChannel,
+    directory: RemotePath,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    let current = RemotePath.ROOT;
+    for (const segment of directory.segments) {
+      current = current.join(segment);
+      try {
+        await channel.mkdir(this.#remote(current), signal);
+      } catch (error) {
+        if (!isReplyCode(error, 550, 521)) throw error;
+      }
+    }
   }
 
   /**

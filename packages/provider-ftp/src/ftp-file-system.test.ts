@@ -466,6 +466,156 @@ describe('reading', () => {
   }, 2_000);
 });
 
+describe('writing', () => {
+  it('uploads a file', async () => {
+    const channel = fakeChannel();
+    const fs = await connected(channel);
+    await fs.writeFile(RemotePath.parse('/a.txt'), new TextEncoder().encode('payload'));
+    expect(channel.calls).toContain('upload /home/alice/a.txt');
+  });
+
+  it('creates the missing ancestors of a nested write', async () => {
+    // The conformance suite writes to `tree/nested/two.txt` without creating
+    // either directory first, because createParents defaults to true.
+    const channel = fakeChannel();
+    const fs = await connected(channel);
+    await fs.writeFile(RemotePath.parse('/tree/nested/two.txt'), new Uint8Array([1]));
+    expect(channel.calls).toContain('mkdir /home/alice/tree');
+    expect(channel.calls).toContain('mkdir /home/alice/tree/nested');
+  });
+
+  it('treats a directory that already exists as success', async () => {
+    // Servers spell that refusal 550 or 521 and disagree about which, so it
+    // cannot be the failure it looks like.
+    const channel = fakeChannel();
+    channel.mkdir = async () => {
+      throw Object.assign(new Error('550 Directory already exists'), { code: 550 });
+    };
+    const fs = await connected(channel);
+    await expect(
+      fs.writeFile(RemotePath.parse('/tree/a.txt'), new Uint8Array([1])),
+    ).resolves.toBeUndefined();
+  });
+
+  it('does not create parents when asked not to', async () => {
+    const channel = fakeChannel();
+    const fs = await connected(channel);
+    await fs.writeFile(RemotePath.parse('/tree/a.txt'), new Uint8Array([1]), {
+      createParents: false,
+    });
+    expect(channel.calls.some((call) => call.startsWith('mkdir'))).toBe(false);
+  });
+
+  it('refuses to overwrite when overwrite is false', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('guarded.txt', { size: 5 }) });
+    const fs = await connected(channel);
+    await expect(
+      fs.writeFile(RemotePath.parse('/guarded.txt'), new Uint8Array([1]), { overwrite: false }),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+    expect(channel.calls.some((call) => call.startsWith('upload'))).toBe(false);
+  });
+
+  it('allows a guarded write when nothing is in the way', async () => {
+    const channel = fakeChannel({ hasMlst: false, list: async () => [] });
+    const fs = await connected(channel);
+    await expect(
+      fs.writeFile(RemotePath.parse('/fresh.txt'), new Uint8Array([1]), { overwrite: false }),
+    ).resolves.toBeUndefined();
+    expect(channel.calls).toContain('upload /home/alice/fresh.txt');
+  });
+
+  it('overwrites by default, without a check first', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('a.txt') });
+    const fs = await connected(channel);
+    await fs.writeFile(RemotePath.parse('/a.txt'), new Uint8Array([1]));
+    expect(channel.calls.some((call) => call.startsWith('mlst'))).toBe(false);
+    expect(channel.calls).toContain('upload /home/alice/a.txt');
+  });
+
+  it('opens a write stream and releases the channel when it closes', async () => {
+    const channel = fakeChannel();
+    const chunks: Uint8Array[] = [];
+    channel.openWriteStream = async () =>
+      new WritableStream<Uint8Array>({
+        write: (chunk) => {
+          chunks.push(chunk);
+        },
+      });
+
+    const fs = await connected(channel, { maxConnections: 1 });
+    const stream = await fs.createWriteStream(RemotePath.parse('/a.txt'));
+    const writer = stream.getWriter();
+    await writer.write(new TextEncoder().encode('payload'));
+    await writer.close();
+
+    expect(new TextDecoder().decode(chunks[0])).toBe('payload');
+    // Deadlocks at a ceiling of one if the stream kept its lease.
+    await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  });
+
+  it('releases the channel when a write stream is aborted', async () => {
+    const channel = fakeChannel();
+    channel.openWriteStream = async () => new WritableStream<Uint8Array>();
+    const fs = await connected(channel, { maxConnections: 1 });
+    const stream = await fs.createWriteStream(RemotePath.parse('/a.txt'));
+    await stream.abort('gave up');
+    await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  });
+
+  // The third way a write stream ends, alongside close() and abort() above:
+  // the sink itself rejects mid-write, and the lease must not survive that
+  // either.
+  it('releases the channel when a write fails', async () => {
+    const channel = fakeChannel();
+    channel.openWriteStream = async () =>
+      new WritableStream<Uint8Array>({
+        write: () => {
+          throw new Error('disk full');
+        },
+      });
+    const fs = await connected(channel, { maxConnections: 1 });
+    const stream = await fs.createWriteStream(RemotePath.parse('/a.txt'));
+    const writer = stream.getWriter();
+    await expect(writer.write(new Uint8Array([1]))).rejects.toThrow('disk full');
+    // Deadlocks at a ceiling of one if the stream kept its lease.
+    await expect(fs.stat(RemotePath.ROOT)).resolves.toBeDefined();
+  });
+});
+
+describe('createDirectory', () => {
+  it('creates the directory and its ancestors', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('deep', { type: 'directory' }) });
+    const fs = await connected(channel);
+    await fs.createDirectory?.(RemotePath.parse('/a/b/deep'));
+    expect(channel.calls).toContain('mkdir /home/alice/a');
+    expect(channel.calls).toContain('mkdir /home/alice/a/b');
+    expect(channel.calls).toContain('mkdir /home/alice/a/b/deep');
+  });
+
+  it('is a no-op on a directory that already exists', async () => {
+    // Matching MemoryFileSystem, which is the contract's reference.
+    const channel = fakeChannel({ mlst: async () => entry('docs', { type: 'directory' }) });
+    channel.mkdir = async () => {
+      throw Object.assign(new Error('550 File exists'), { code: 550 });
+    };
+    const fs = await connected(channel);
+    await expect(fs.createDirectory?.(RemotePath.parse('/docs'))).resolves.toBeUndefined();
+  });
+
+  it('refuses when a file is in the way', async () => {
+    const channel = fakeChannel({ mlst: async () => entry('docs', { type: 'file' }) });
+    channel.mkdir = async () => {
+      throw Object.assign(new Error('550 File exists'), { code: 550 });
+    };
+    const fs = await connected(channel);
+    await expect(fs.createDirectory?.(RemotePath.parse('/docs'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+});
+
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   const items: T[] = [];
   for await (const item of iterable) items.push(item);
