@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
+import { NOOP_LOGGER, OmniFsError, RemotePath, collectStream } from '@omni-fs/core';
 import type { ConnectionConfig, ProviderContext } from '@omni-fs/core';
 import { FTP_CAPABILITIES, FtpFileSystem } from './ftp-file-system.js';
 import type { FtpChannel } from './ftp-channel.js';
@@ -16,6 +16,12 @@ interface FakeChannelOptions {
   readonly list?: (path: string) => Promise<readonly FtpEntry[]>;
   /** Served by `openReadStream`, honouring `start` and `length`. */
   readonly content?: string;
+  /**
+   * Leaves the data connection open after the first chunk, the way a `RETR` of
+   * a large file is open between chunks. Only a transfer still in flight can be
+   * aborted part-way through.
+   */
+  readonly stalls?: boolean;
 }
 
 function entry(name: string, overrides: Partial<FtpEntry> = {}): FtpEntry {
@@ -61,7 +67,11 @@ function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
       calls.push(`rename ${from} ${to}`);
     },
     openReadStream: async (path, range, transfer) => {
-      calls.push(`read ${path} ${range?.start ?? 0}:${range?.length ?? ''}`);
+      // Whether a signal arrived is recorded, not just the path and range: the
+      // channel is the layer that tears a transfer down, so a provider that
+      // dropped the signal on the way here would otherwise look identical.
+      const signalled = String(transfer?.signal !== undefined);
+      calls.push(`read ${path} ${range?.start ?? 0}:${range?.length ?? ''} signal=${signalled}`);
       const body = options.content ?? '';
       const start = range?.start ?? 0;
       const slice =
@@ -73,7 +83,28 @@ function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
       return new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode(slice));
-          controller.close();
+          if (options.stalls !== true) {
+            controller.close();
+            return;
+          }
+          // Mirrors `FtpControlChannel.openReadStream`: an abort part-way
+          // through poisons the control channel and errors the transfer, rather
+          // than ending it as though the file had simply stopped.
+          transfer?.signal?.addEventListener(
+            'abort',
+            () => {
+              channel.poison();
+              controller.error(
+                new OmniFsError({
+                  code: 'Cancelled',
+                  message: `Cancelled: ${path}`,
+                  providerId: 'ftp',
+                  path,
+                }),
+              );
+            },
+            { once: true },
+          );
         },
       });
     },
@@ -368,6 +399,7 @@ describe('reading', () => {
     await fs.readFile(RemotePath.parse('/a.txt'), { offset: 0, length: 4 });
     await fs.stat(RemotePath.ROOT);
 
+    expect(opened[0]?.isAlive()).toBe(false);
     expect(opened.length).toBe(2);
   }, 2_000);
 
@@ -383,24 +415,55 @@ describe('reading', () => {
     await fs.readFile(RemotePath.parse('/a.txt'));
     await fs.stat(RemotePath.ROOT);
 
+    expect(opened[0]?.isAlive()).toBe(true);
     expect(opened.length).toBe(1);
   }, 2_000);
 
-  it('reports progress as bytes arrive', async () => {
+  // Named for what it checks. The fake reports once, up front, so this says the
+  // handler reached `openReadStream` — not that FTP reports incrementally,
+  // which is `ftp-channel.test.ts`'s to prove.
+  it("passes the caller's progress handler down to the channel", async () => {
     const seen: number[] = [];
     const fs = await connected(fakeChannel({ content: 'payload' }));
     await fs.readFile(RemotePath.parse('/a.txt'), { onProgress: (n) => seen.push(n) });
     expect(seen.at(-1)).toBe(7);
   });
 
-  it("carries the caller's abort signal down to the channel", async () => {
-    const fs = await connected(fakeChannel({ content: 'payload' }));
+  it('refuses an already-aborted signal before it acquires a channel', async () => {
+    // This one stops inside `pool.acquire`, so it says nothing about the signal
+    // reaching `openReadStream` — the case below is what covers that.
+    const channel = fakeChannel({ content: 'payload' });
+    const fs = await connected(channel);
     const controller = new AbortController();
     controller.abort();
     await expect(
       fs.readFile(RemotePath.parse('/a.txt'), { signal: controller.signal }),
     ).rejects.toSatisfy((error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled');
+    expect(channel.calls.some((call) => call.startsWith('read'))).toBe(false);
   });
+
+  // The half with teeth. A transfer already in flight is the channel's to tear
+  // down — it poisons itself and errors the stream. A provider that dropped the
+  // signal on the way to `openReadStream` would leave the RETR running and the
+  // channel looking healthy: a wedged connection rather than an error, and
+  // nothing above here would notice.
+  it("carries the caller's abort signal down to the channel", async () => {
+    const channel = fakeChannel({ content: 'payload', stalls: true });
+    const fs = await connected(channel);
+    const controller = new AbortController();
+    const stream = await fs.createReadStream(RemotePath.parse('/a.txt'), {
+      signal: controller.signal,
+    });
+    expect(channel.calls).toContain('read /home/alice/a.txt 0: signal=true');
+
+    const draining = collectStream(stream);
+    controller.abort();
+
+    await expect(draining).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled',
+    );
+    expect(channel.isAlive()).toBe(false);
+  }, 2_000);
 });
 
 async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
