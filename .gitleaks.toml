@@ -28,6 +28,15 @@ paths = [
   '''apps/vscode/out/''',
 ]
 
+# One exception by value, not by name: the password of the throwaway servers
+# in compose.yaml. It is published on purpose — compose.yaml, the conformance
+# configs and the docs all spell it out so anyone can run the live suite — and
+# it only ever guards containers on localhost. Matching the value keeps every
+# rule live for any other secret on the same line or in the same field.
+regexes = [
+  '''omnifs-dev-secret''',
+]
+
 [[rules]]
 # Covered by useDefault, but stated explicitly so the intent is visible to
 # anyone tempted to widen the allowlist above: this must always fire.
