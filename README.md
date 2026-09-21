@@ -7,17 +7,18 @@
 Browse, edit and transfer remote files without leaving your editor.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Open VSX](https://img.shields.io/open-vsx/v/ryftcore/omni-fs-vscode?label=Open%20VSX)](https://open-vsx.org/extension/ryftcore/omni-fs-vscode)
 
 </div>
 
 ---
 
-> **Status: beta.** The architecture, core and all four providers — S3, WebDAV,
-> SFTP and FTP/FTPS — are in place, and each passes the shared conformance suite
-> against a real server of its protocol in CI. The published release,
-> `v0.1.0-beta.1`, predates WebDAV and ships S3 alone — see
-> [Roadmap](#roadmap) and the
-> [extension changelog](apps/vscode/CHANGELOG.md).
+> **Status: pre-release.** The architecture, core and all four providers — S3,
+> WebDAV, SFTP and FTP/FTPS — are in place and published, and each passes the
+> shared conformance suite against a real server of its protocol in CI. What
+> each release contains is in the
+> [extension changelog](apps/vscode/CHANGELOG.md); what is still missing is in
+> the [Roadmap](#roadmap).
 
 ## What it is
 
@@ -52,7 +53,15 @@ it behaves correctly because of it.
 | **SFTP (SSH)**         | ✅ Implemented | Password, private key, SSH agent                                      |
 | **WebDAV**             | ✅ Implemented | Nextcloud, ownCloud                                                   |
 
-## Quick start
+## Install
+
+The VS Code extension is published to the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=ryftcore.omni-fs-vscode)
+and [Open VSX](https://open-vsx.org/extension/ryftcore/omni-fs-vscode), and each
+release's `.vsix` is attached to its
+[GitHub release](https://github.com/ryftcore/omni-fs/releases).
+
+## Build from source
 
 ```bash
 git clone https://github.com/ryftcore/omni-fs.git

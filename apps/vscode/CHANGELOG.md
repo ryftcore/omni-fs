@@ -1,5 +1,60 @@
 # Changelog
 
+Odd minor versions (0.1.x, 0.3.x) are pre-releases; even minor versions are
+stable.
+
+## 0.1.1
+
+Documentation only. No change in behaviour from 0.1.0.
+
+- The README described the 0.1.0-beta.1 build — S3 only — and its changelog
+  link pointed at a file that does not exist. It now describes what ships, and
+  says how to install from the VS Code Marketplace, Open VSX or a `.vsix`.
+
+## 0.1.0
+
+The first build with every protocol. First published to Open VSX.
+
+### New
+
+- **FTP and FTPS.** Explicit TLS (AUTH TLS, the default), implicit TLS on port
+  990, or plain FTP. Adjustable minimum TLS version for legacy servers, and an
+  opt-in for self-signed certificates. `MLSD`/`MLST` where the server offers
+  them, `LIST` parsing where it does not. Byte-range reads, writes that create
+  missing parent directories, rename, and recursive delete.
+- **Several FTP connections at once.** _Maximum connections_ (1 by default, up
+  to 8) lets browsing carry on during a transfer. If the server refuses the
+  extra logins, the pool shrinks to what it accepts instead of failing.
+- **SFTP.** Password, private key and SSH-agent authentication. A host key is
+  checked against `known_hosts`, and a host whose key has changed is refused.
+  Byte-range reads, writes that do not overwrite by accident, server-side copy,
+  and symlinks resolved when listing. A root prefix of `/` means the server's
+  filesystem root.
+- **WebDAV.** Nextcloud, ownCloud and other WebDAV servers. Capabilities come
+  from what the server actually answers, so unsupported actions are greyed out
+  in advance.
+- **Connection manager panel.** Connections are added and edited in one panel
+  instead of a series of prompts. A draft can be tested before it is saved.
+- **Colour-tagged connections.** Eleven preset colours or any custom one. The
+  colour tints the connection in the tree and its files in the Explorer and
+  editor tabs.
+- **Read-only toggle.** _Make Read-only_ / _Make Writable_ on a connection's
+  context menu applies to the next write, without reconnecting.
+
+### Fixed
+
+- A zero-length S3 read no longer sends an inverted byte range.
+- A failed streamed write no longer leaves a stale cached file size behind.
+- Renaming a directory works on protocols where rename is emulated.
+- A reconnect closes the dead connection it replaces.
+- A connection whose provider cannot be built shows an error instead of hanging.
+
+### Still missing
+
+- The **Download…** and **Upload…** commands are stubs.
+- Moving or copying between two different connections is refused.
+- No change notifications: refresh is explicit.
+
 ## 0.1.0-beta.1
 
 First beta. **S3 works; the other three protocols do not yet.** Please read

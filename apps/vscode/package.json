@@ -2,7 +2,7 @@
   "name": "omni-fs-vscode",
   "displayName": "Omni-FS",
   "description": "Browse and edit remote files over S3, FTP, FTPS, SFTP and WebDAV directly in VS Code",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "ryftcore",
   "license": "MIT",
   "private": true,
