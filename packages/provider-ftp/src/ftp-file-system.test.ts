@@ -30,15 +30,15 @@ function entry(name: string, overrides: Partial<FtpEntry> = {}): FtpEntry {
 }
 
 /**
- * What a real `FtpControlChannel` throws for a permission-denied `MKD`: a 550
- * reply, already classified by `toOmniFsError` (`errors.test.ts` pins that
- * classification). vsftpd and pure-ftpd both answer "directory already
- * exists" with the same 550, so a fixture keyed only on the raw reply code
+ * What a real `FtpControlChannel` throws for a permission-denied `MKD`: a
+ * 550 or 521 reply, already classified by `toOmniFsError` (`errors.test.ts`
+ * pins that classification for both codes). Both are also how servers spell
+ * "directory already exists," so a fixture keyed only on the raw reply code
  * cannot exercise this — the message is what makes it PermissionDenied rather
- * than the default NotFound.
+ * than the default `NotFound`/`Unknown`.
  */
-function lockedDirectoryError(path: string): Error {
-  return toOmniFsError(Object.assign(new Error('550 Permission denied.'), { code: 550 }), path);
+function lockedDirectoryError(path: string, code: 550 | 521 = 550): Error {
+  return toOmniFsError(Object.assign(new Error(`${code} Permission denied.`), { code }), path);
 }
 
 function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
@@ -519,6 +519,23 @@ describe('writing', () => {
     const channel = fakeChannel();
     channel.mkdir = async () => {
       throw lockedDirectoryError('/locked');
+    };
+    const fs = await connected(channel);
+    await expect(
+      fs.writeFile(RemotePath.parse('/locked/a.txt'), new Uint8Array([1])),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'PermissionDenied',
+    );
+    expect(channel.calls.some((call) => call.startsWith('upload'))).toBe(false);
+  });
+
+  // Same bug, different reply code: `#mkdirp`'s deny-list also swallows 521,
+  // and a server that answers a locked `MKD` with 521 instead of 550 used to
+  // reproduce the silent-success defect exactly.
+  it('propagates a permission-denied 521 while creating a missing parent, instead of writing as though it had succeeded', async () => {
+    const channel = fakeChannel();
+    channel.mkdir = async () => {
+      throw lockedDirectoryError('/locked', 521);
     };
     const fs = await connected(channel);
     await expect(

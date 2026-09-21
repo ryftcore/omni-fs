@@ -58,6 +58,11 @@ const PERMISSION_MESSAGE = /permission denied|access denied|not allowed|forbidde
  * stat as `NotFound`, and `NotFound` is what 550 means the overwhelming
  * majority of the time. So the default is `NotFound`, and the call sites narrow
  * through `isReplyCode` — `RMD` to `NotEmpty`, `MKD` to `AlreadyExists`.
+ *
+ * 521 gets the same permission carve-out as 550, for the same reason a locked
+ * `MKD` can arrive as either: it has no dominant meaning to default to, so
+ * only the permission case is classified and everything else still falls
+ * through to `Unknown`, exactly as before that carve-out existed.
  */
 export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
   if (OmniFsError.is(cause)) return cause;
@@ -113,6 +118,17 @@ export function toOmniFsError(cause: unknown, path?: string): OmniFsError {
             code: 'NotFound',
             message: `Not found: ${path ?? 'resource'}`,
           });
+    }
+    // 521 is non-standard and just as ambiguous as 550 — servers answer it
+    // both for "already exists" and for "access denied" on a locked `MKD`.
+    // Unlike 550 it has no dominant meaning to default to, so a non-permission
+    // 521 falls through exactly as it always has, to `Unknown` below. Only the
+    // permission case is carved out, the same sniff and the same reasoning as
+    // 550's, so `#mkdirp`'s swallow of 550/521 cannot mistake a locked
+    // directory for one that already exists just because the server chose 521
+    // instead of 550.
+    if (code === 521 && PERMISSION_MESSAGE.test(message)) {
+      return new OmniFsError({ ...base, code: 'PermissionDenied', message });
     }
     if (code === 553) return new OmniFsError({ ...base, code: 'PermissionDenied', message });
     if (code === 421 || DATA_CONNECTION_REPLIES.includes(code)) {

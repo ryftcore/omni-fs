@@ -37,6 +37,19 @@ describe('toOmniFsError', () => {
     expect(toOmniFsError(reply(553)).code).toBe('PermissionDenied');
   });
 
+  it('reads a 521 that says permission denied as PermissionDenied', () => {
+    expect(toOmniFsError(reply(521, '521 Access denied')).code).toBe('PermissionDenied');
+  });
+
+  it('leaves a plain 521 classified as Unknown, because it has no dominant meaning like 550 does', () => {
+    // 521 is non-standard, and servers use it for "already exists" as much as
+    // for a refusal — the permission sniff must only narrow, never invent a
+    // meaning for the ordinary case.
+    const error = toOmniFsError(reply(521, '521 Directory already exists'));
+    expect(error.code).toBe('Unknown');
+    expect(error.message).toBe('521 Directory already exists');
+  });
+
   it('reads the login refusals as AuthenticationFailed', () => {
     expect(toOmniFsError(reply(530)).code).toBe('AuthenticationFailed');
     expect(toOmniFsError(reply(332)).code).toBe('AuthenticationFailed');
