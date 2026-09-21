@@ -1,3 +1,4 @@
+import { parseConnectionColor } from '../model/connection-color.js';
 import type { ConnectionConfig } from '../model/connection.js';
 import type { ProviderDefinition, SettingsField } from '../provider.js';
 import type { ConnectionDraft, DraftSection, ProviderSummary, SecretPatchEntry } from './types.js';
@@ -35,6 +36,9 @@ export function createDraft(provider: ProviderSummary, config?: ConnectionConfig
   const label = config?.label ?? '';
   const rootPath = config?.rootPath ?? '/';
   const readOnly = config?.readOnly ?? false;
+  // Normalised here so an unrecognised or differently-cased stored value does
+  // not leave a fresh draft dirty.
+  const color = parseConnectionColor(config?.color)?.value;
 
   return {
     id: config?.id,
@@ -44,7 +48,8 @@ export function createDraft(provider: ProviderSummary, config?: ConnectionConfig
     secret,
     rootPath,
     readOnly,
-    baseline: { label, settings: { ...settings }, rootPath, readOnly },
+    color,
+    baseline: { label, settings: { ...settings }, rootPath, readOnly, color },
   };
 }
 
@@ -58,6 +63,11 @@ export function setRootPath(draft: ConnectionDraft, rootPath: string): Connectio
 
 export function setReadOnly(draft: ConnectionDraft, readOnly: boolean): ConnectionDraft {
   return { ...draft, readOnly };
+}
+
+/** `undefined`, or anything that is not a colour, clears it. */
+export function setColor(draft: ConnectionDraft, color: string | undefined): ConnectionDraft {
+  return { ...draft, color: parseConnectionColor(color)?.value };
 }
 
 export function setField(
@@ -83,6 +93,7 @@ export function isDirty(draft: ConnectionDraft): boolean {
   if (draft.label !== draft.baseline.label) return true;
   if (draft.rootPath !== draft.baseline.rootPath) return true;
   if (draft.readOnly !== draft.baseline.readOnly) return true;
+  if (draft.color !== draft.baseline.color) return true;
 
   const keys = new Set([...Object.keys(draft.settings), ...Object.keys(draft.baseline.settings)]);
   for (const key of keys) {

@@ -4,6 +4,7 @@ import {
   createDraft,
   isDirty,
   setField,
+  setColor,
   setLabel,
   toSecretPatch,
 } from './draft.js';
@@ -64,6 +65,55 @@ describe('createDraft', () => {
     // separately to `fieldView` and `validateDraft`.
     expect(draft.secret['password']).toEqual({ kind: 'unchanged' });
     expect(draft.secret['token']).toEqual({ kind: 'unchanged' });
+  });
+
+  it('starts a new connection with no colour', () => {
+    expect(createDraft(provider).color).toBeUndefined();
+  });
+
+  it('loads a stored colour in its canonical form', () => {
+    const base = { id: 'c1', providerId: 'demo', label: 'prod', settings: {} };
+    expect(createDraft(provider, { ...base, color: 'red' }).color).toBe('red');
+    expect(createDraft(provider, { ...base, color: '#AABBCC' }).color).toBe('#aabbcc');
+  });
+
+  it('drops an unrecognised stored colour instead of carrying it into the form', () => {
+    const draft = createDraft(provider, {
+      id: 'c1',
+      providerId: 'demo',
+      label: 'prod',
+      settings: {},
+      color: 'crimson',
+    });
+    expect(draft.color).toBeUndefined();
+    expect(isDirty(draft)).toBe(false);
+  });
+});
+
+describe('setColor', () => {
+  const draft = createDraft(provider, {
+    id: 'c1',
+    providerId: 'demo',
+    label: 'prod',
+    settings: {},
+    color: 'red',
+  });
+
+  it('marks the draft dirty, and clean again when the colour is put back', () => {
+    const blue = setColor(draft, 'blue');
+    expect(blue.color).toBe('blue');
+    expect(isDirty(blue)).toBe(true);
+    expect(isDirty(setColor(blue, 'red'))).toBe(false);
+  });
+
+  it('clears with undefined', () => {
+    const cleared = setColor(draft, undefined);
+    expect(cleared.color).toBeUndefined();
+    expect(isDirty(cleared)).toBe(true);
+  });
+
+  it('ignores a value that is not a colour', () => {
+    expect(setColor(draft, 'not-a-colour').color).toBeUndefined();
   });
 });
 
