@@ -43,6 +43,34 @@ function connect(
 }
 
 /**
+ * A connection that counts its logins.
+ *
+ * `FtpPool` resolves the secret once per control channel it opens, so
+ * `getSecret` is an exact count of the connections this filesystem has made to
+ * the server — the only evidence available from outside the package about how
+ * many channels the pool really used. Two cases below turn on that number, and
+ * neither could assert what its name claims without it: three transfers that
+ * came back whole say nothing about whether they overlapped, and an operation
+ * that succeeded after a torn-down one says nothing about whether the dead
+ * channel was reused or replaced.
+ */
+function countingConnect(settings: Readonly<Record<string, unknown>>): {
+  fs: FtpFileSystem;
+  logins: () => number;
+} {
+  let logins = 0;
+  const fs = new FtpFileSystem({
+    config: { id: 'live', providerId: 'ftp', label: 'live', settings: { ...BASE, ...settings } },
+    getSecret: async () => {
+      logins += 1;
+      return { password: PASSWORD };
+    },
+    logger: NOOP_LOGGER,
+  });
+  return { fs, logins: () => logins };
+}
+
+/**
  * A transport-only channel, for setup and cleanup that must not use the
  * methods under test. A cleanup that ran through one could not fail safely,
  * and one failure leaves a `conformance-*` directory behind for every run
@@ -241,33 +269,14 @@ describe('FTP live behaviour the shared suite cannot express', () => {
   });
 
   it('overlaps transfers when the pool is allowed more than one channel', async () => {
-    // Counted rather than timed. `FtpPool.open` resolves the secret once per
-    // control channel it opens, so this is an exact login count — and a login
-    // count is the only evidence available here that the three reads were
-    // actually in flight together. A pool pinned to one channel would finish
-    // all three too, serially, on a single login: asserting only that the bytes
-    // came back would pass either way and the name would be a lie.
-    let logins = 0;
-    const fs = new FtpFileSystem({
-      config: {
-        id: 'live',
-        providerId: 'ftp',
-        label: 'live',
-        settings: { ...BASE, maxConnections: 3 },
-      },
-      getSecret: async () => {
-        logins += 1;
-        return { password: PASSWORD };
-      },
-      logger: NOOP_LOGGER,
-    });
+    const { fs, logins } = countingConnect({ maxConnections: 3 });
 
     await fs.connect();
     try {
       expect(fs.capabilities.maxConcurrency).toBe(3);
       // `connect` resolves the base through a lease of its own, which it then
       // returns to the pool.
-      expect(logins).toBe(1);
+      expect(logins()).toBe(1);
 
       const reads = await Promise.all([
         fs.readFile(RemotePath.parse('/data/large.bin')),
@@ -278,7 +287,7 @@ describe('FTP live behaviour the shared suite cannot express', () => {
       // Three transfers, three control channels: the first reuses the idle one,
       // and the other two could only have been served by opening more, which
       // the pool does exactly when a channel is already busy.
-      expect(logins).toBe(3);
+      expect(logins()).toBe(3);
 
       // And each came back whole, which is what breaks if the pool ever hands
       // the same control channel to two of them. `large.bin` is the 1 MiB file
@@ -287,6 +296,63 @@ describe('FTP live behaviour the shared suite cannot express', () => {
 
       // And that the ceiling never fell, i.e. the server really did allow three.
       expect(fs.capabilities.maxConcurrency).toBe(3);
+    } finally {
+      await fs[Symbol.asyncDispose]();
+    }
+  });
+
+  /**
+   * The shared suite's `reads a byte range` case reaches this code live four
+   * times over, but it never asks the connection for anything afterwards — so
+   * on its own it proves the bytes were right, not that the connection
+   * survived. That gap is the whole of spec decision 6: `RETR` has no
+   * end-of-range, so a bounded read stops by tearing the control channel down
+   * mid-command, and the channel must then be discarded rather than handed to
+   * the next caller, who would read the abandoned reply as their own.
+   *
+   * Both halves are pinned hermetically (`ftp-file-system.test.ts` >
+   * "replaces the channel a bounded read poisoned", `ftp-pool.test.ts` >
+   * "discards a poisoned channel on release rather than handing it on"), but
+   * against a fake whose `downloadTo` settles on demand. Whether a *real*
+   * vsftpd transfer settles once its data socket is destroyed, and whether the
+   * pool really recovers from that, is only answerable here.
+   *
+   * The pool defends this twice — `release` discards a channel that is no
+   * longer alive, and `acquire` re-checks any channel it pops from the idle
+   * list — so this case is named for the behaviour rather than for either
+   * guard. Removing one guard alone leaves it passing; removing both makes it
+   * fail with `Client is closed because User closed client during task`, which
+   * is the symptom a user would have seen.
+   */
+  it('discards the channel a bounded read tore down, and logs in again for the next call', async () => {
+    // Pool of one, so a channel that was wrongly kept would be the *only*
+    // channel and the next call would hang or read the wrong reply.
+    const { fs, logins } = countingConnect({ maxConnections: 1 });
+    await fs.connect();
+    try {
+      expect(logins()).toBe(1);
+
+      // The control, without which the count below would prove nothing: an
+      // *unbounded* read of the same file runs to completion, so its channel
+      // goes back to the pool healthy and no second login happens. This is the
+      // case that fails if transfers simply cost a login each.
+      const whole = await fs.readFile(RemotePath.parse('/data/sample.json'));
+      expect(new TextDecoder().decode(whole)).toContain('"ok"');
+      expect(logins()).toBe(1);
+
+      // `{"ok":true}` — bytes 2..4 are `ok"`.
+      const slice = await fs.readFile(RemotePath.parse('/data/sample.json'), {
+        offset: 2,
+        length: 3,
+      });
+      expect(new TextDecoder().decode(slice)).toBe('ok"');
+
+      const names = (await collect(fs.list(RemotePath.ROOT))).map((entry) => entry.name);
+      expect(names).toContain('readme.txt');
+
+      // The listing above could only have been served by a second login, which
+      // is what says the poisoned channel was discarded rather than reused.
+      expect(logins()).toBe(2);
     } finally {
       await fs[Symbol.asyncDispose]();
     }
