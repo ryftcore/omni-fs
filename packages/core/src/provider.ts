@@ -168,6 +168,7 @@ export type SettingsField =
       default?: number;
       min?: number;
       max?: number;
+      help?: string;
     }
   | { kind: 'boolean'; key: string; label: string; default?: boolean; help?: string }
   | {
@@ -177,5 +178,6 @@ export type SettingsField =
       required?: boolean;
       options: readonly { value: string; label: string }[];
       default?: string;
+      help?: string;
     }
   | { kind: 'file'; key: string; label: string; required?: boolean; help?: string };
