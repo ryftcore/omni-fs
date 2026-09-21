@@ -1,7 +1,7 @@
 name: Release
 
 # Pushing a `v<version>` tag is the whole release: verify, package, publish to
-# the VS Code Marketplace, then attach the same .vsix to a GitHub release.
+# Open VSX, then attach the same .vsix to a GitHub release.
 #
 # Running it by hand from a branch is a dry run — everything up to the packaged
 # .vsix, uploaded as an artifact, and nothing published. Running it by hand
@@ -12,7 +12,7 @@ on:
     tags: ['v*']
   workflow_dispatch:
 
-# Two releases of one tag must never race each other to the Marketplace.
+# Two releases of one tag must never race each other to the registry.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -48,12 +48,14 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # The Marketplace refuses semver pre-release versions (`0.1.0-beta.1`)
-      # outright; a pre-release there is a plain `major.minor.patch` published
-      # with a flag. So the channel follows VS Code's own recommendation: an
-      # odd minor is a pre-release, an even minor is stable. Pre-release users
-      # are moved to a stable build once its version is higher, so 0.1.x
-      # pre-releases hand over to 0.2.0 without anyone reinstalling.
+      # VS Code's pre-release channel is not a semver suffix (`0.1.0-beta.1`):
+      # it is a plain `major.minor.patch` whose .vsix carries a pre-release
+      # flag, and the VS Code Marketplace, which gets this same .vsix by hand,
+      # rejects a suffix outright. So the channel follows VS Code's own
+      # recommendation: an odd minor is a pre-release, an even minor is
+      # stable. Pre-release users are moved to a stable build once its
+      # version is higher, so 0.1.x pre-releases hand over to 0.2.0 without
+      # anyone reinstalling.
       #
       # A tag that disagrees with the manifest would publish a .vsix whose
       # version does not match the release it is attached to, so that is
@@ -64,7 +66,7 @@ jobs:
           set -euo pipefail
           version=$(node -p "require('./apps/vscode/package.json').version")
           if ! [[ "$version" =~ ^[0-9]+\.([0-9]+)\.[0-9]+$ ]]; then
-            echo "::error::apps/vscode/package.json version '$version' must be plain major.minor.patch — the Marketplace rejects pre-release suffixes. Use an odd minor for a pre-release."
+            echo "::error::apps/vscode/package.json version '$version' must be plain major.minor.patch — a pre-release is a flag, not a suffix. Use an odd minor for a pre-release."
             exit 1
           fi
           minor="${BASH_REMATCH[1]}"
@@ -84,9 +86,9 @@ jobs:
       - run: pnpm test
 
       # `package:vsix` with the pre-release flag passed through turbo to the
-      # trailing `vsce package`. The flag has to be set here, not only at
-      # publish: it is written into the .vsix manifest, and `vsce publish
-      # --pre-release` refuses a package that lacks it.
+      # trailing `vsce package`. The flag has to be set here: it is written
+      # into the .vsix manifest, which is the only place Open VSX reads it
+      # from — `ovsx publish` ignores `--pre-release` for a prepackaged .vsix.
       - name: Package extension
         env:
           PRERELEASE: ${{ steps.channel.outputs.prerelease }}
@@ -115,8 +117,8 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  marketplace:
-    name: publish to VS Code Marketplace
+  open-vsx:
+    name: publish to Open VSX
     needs: build
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
@@ -125,12 +127,15 @@ jobs:
     # The token is an environment secret, not a repository one, so only this
     # job can read it — and required reviewers on the environment, if set in
     # the repository settings, become the approval gate before a publish.
+    #
+    # The VS Code Marketplace is published by hand, from the .vsix attached to
+    # the GitHub release, so no Marketplace token lives in this repository.
     environment:
-      name: marketplace
-      url: https://marketplace.visualstudio.com/items?itemName=ryftcore.omni-fs-vscode
+      name: open-vsx
+      url: https://open-vsx.org/extension/ryftcore/omni-fs-vscode
 
     steps:
-      # Checked out only for the lockfile, so vsce is the pinned version rather
+      # Checked out only for the lockfile, so ovsx is the pinned version rather
       # than whatever `npx` resolves today.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -150,30 +155,28 @@ jobs:
           name: omni-fs-vsix
           path: dist-vsix
 
-      # Publishes the exact .vsix the build job verified, never a repackage.
-      # --skip-duplicate makes a retry after a later failure — the GitHub
-      # release, say — succeed instead of stopping on "version exists".
+      # Publishes the exact .vsix the build job verified, never a repackage;
+      # its manifest already says whether it is a pre-release. --skip-duplicate
+      # makes a retry after a later failure — the GitHub release, say — succeed
+      # instead of stopping on "already published".
       #
       # The token check lives in the script: the `secrets` context is not
       # available to `if:`, so a guard there would silently skip the publish.
       - name: Publish
         env:
-          VSCE_PAT: ${{ secrets.VSCE_PAT }}
-          PRERELEASE: ${{ needs.build.outputs.prerelease }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
         run: |
           set -euo pipefail
-          if [ -z "${VSCE_PAT:-}" ]; then
-            echo "::error::The VSCE_PAT secret is not set on the 'marketplace' environment."
+          if [ -z "${OVSX_PAT:-}" ]; then
+            echo "::error::The OVSX_PAT secret is not set on the 'open-vsx' environment."
             exit 1
           fi
           VSIX=$(ls "$PWD"/dist-vsix/*.vsix)
-          flags=(--packagePath "$VSIX" --skip-duplicate)
-          if [ "$PRERELEASE" = true ]; then flags+=(--pre-release); fi
-          pnpm --filter omni-fs-vscode exec vsce publish "${flags[@]}"
+          pnpm --filter omni-fs-vscode exec ovsx publish "$VSIX" --skip-duplicate
 
   github-release:
     name: GitHub release
-    needs: [build, marketplace]
+    needs: [build, open-vsx]
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -186,8 +189,9 @@ jobs:
           name: omni-fs-vsix
           path: dist-vsix
 
-      # After the Marketplace, so a release page never offers a version the
-      # Marketplace does not have.
+      # After Open VSX, so a release page never offers a version Open VSX does
+      # not have. This .vsix is also the one to upload to the VS Code
+      # Marketplace by hand.
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist-vsix/*.vsix
