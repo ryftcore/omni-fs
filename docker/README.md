@@ -1,14 +1,27 @@
 # Local test servers
 
 ```bash
-docker compose up -d --build   # start (the SFTP and FTP images are built here)
-docker compose ps              # check
-docker compose down -v         # stop and delete all test data
+docker compose up -d --build --wait minio sftp ftp webdav   # start
+docker compose ps                                           # check
+docker compose down -v                                      # stop, delete all test data
 ```
 
 `--build` is worth typing: two of the four servers are built from
 `docker/sftp/` and `docker/ftp/` rather than pulled, so a change to either
 Dockerfile is otherwise ignored.
+
+`--wait` is worth more. Plain `up -d` returns once the containers have been
+_created_, which on a cold machine is well before any of them is listening —
+and only the FTP conformance suite retries its first call, so the other three
+would race it. Every service has a healthcheck that completes a real exchange
+in its own protocol (an FTP `220` on all three listeners, sshd's identification
+string, a WebDAV `PROPFIND` answered `207`), and the two seed jobs run ahead of
+the servers, so `--wait` returns once the stack is answering _and_ seeded.
+
+The four services are named because `--wait` given no names also waits on
+`minio-init` and `file-seed`, and treats their clean exit as a failure —
+`container … exited (0)`, exit code 1. Naming the long-running four still
+pulls both seed jobs in and still waits for them.
 
 Every server binds to `127.0.0.1` only. The credentials below are committed
 deliberately and must never be used anywhere real.
@@ -30,7 +43,7 @@ With the stack up, the shared behavioural contract runs against the live
 servers:
 
 ```bash
-docker compose up -d --build
+docker compose up -d --build --wait minio sftp ftp webdav
 pnpm test:conformance
 ```
 
@@ -38,8 +51,8 @@ All four provider packages define the script, so all four run — and
 `packages/provider-ftp` runs the whole contract four times over, once per
 listener below. A provider is finished exactly when this passes for it.
 
-CI runs the same command in the `conformance (live)` job, on Linux only,
-against `docker compose up -d --build`.
+CI runs both of these, in that order, in the `conformance (live)` job, on
+Linux only.
 
 Every case makes its own `/conformance-<timestamp>-<n>` directory and removes
 it again, so the seeded tree above is what a `PROPFIND` should show both before

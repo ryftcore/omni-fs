@@ -193,9 +193,18 @@ jobs:
       - run: pnpm build
 
       # --build because docker/sftp and docker/ftp are built here rather than
-      # pulled. Readiness is the suites' job: each retries its first call for
-      # up to 60s, so starting the tests a second after `up` is fine.
-      - run: docker compose up -d --build
+      # pulled. --wait is what makes the next step safe: only the FTP suite
+      # retries its first call, so the other three would race a server that is
+      # not yet listening. Every service here has a healthcheck that completes
+      # a real exchange in its own protocol, and the two seed jobs are chained
+      # ahead of the servers, so this returns once all four are answering and
+      # their trees are in place.
+      #
+      # The four are named because `--wait` with no names also waits on the
+      # seed jobs and reports their clean exit as a failure of the wait
+      # (`container ... exited (0)`, exit code 1). Naming these still pulls the
+      # seed jobs in as dependencies, and still waits for them.
+      - run: docker compose up -d --build --wait minio sftp ftp webdav
 
       - run: pnpm test:conformance
 

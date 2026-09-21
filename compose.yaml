@@ -8,6 +8,23 @@
 #
 # S3, WebDAV, SFTP and FTP are all implemented, and `pnpm test:conformance`
 # runs the shared suite against these servers.
+#
+#   docker compose up -d --build --wait minio sftp ftp webdav
+#
+# is the form CI uses and the one to prefer: every server here has a
+# healthcheck that completes a real exchange in its own protocol, so `--wait`
+# returns when the stack can actually answer rather than when the containers
+# exist. Each of those checks polls once a second while a container is
+# starting and then drops to once every 30s, because all three file servers
+# log their connections and a healthcheck running every two seconds forever
+# would be most of what `docker compose logs --tail=50` shows after a failure.
+#
+# The four services are named rather than left implicit because `--wait` with
+# no names also waits on `minio-init` and `file-seed`, and reports their
+# *clean* exit as a failure: `container ... exited (0)`, exit code 1. Naming
+# the long-running four still pulls both seed jobs in as dependencies and
+# still waits for them, because the chain below runs them ahead of the
+# servers.
 
 name: omni-fs-dev
 
@@ -58,10 +75,23 @@ services:
   # --- SFTP -----------------------------------------------------------------
   sftp:
     build: ./docker/sftp
+    depends_on:
+      file-seed:
+        condition: service_completed_successfully
     ports:
       - '127.0.0.1:2222:22'
     volumes:
       - sftp-data:/data
+    healthcheck:
+      # sshd sends its identification string before any key exchange, so this
+      # is the cheapest thing that proves the server is answering rather than
+      # merely running.
+      test: ['CMD-SHELL', 'nc -w 2 127.0.0.1 22 </dev/null | grep -q "^SSH-2.0-"']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
 
   # --- FTP / FTPS ------------------------------------------------------------
   # Three listeners, all serving the same /data volume as the same user:
@@ -71,6 +101,9 @@ services:
   # Passive mode needs the data ports published too, or listings hang.
   ftp:
     build: ./docker/ftp
+    depends_on:
+      file-seed:
+        condition: service_completed_successfully
     ports:
       - '127.0.0.1:2121:21'
       - '127.0.0.1:2990:990'
@@ -78,10 +111,29 @@ services:
       - '127.0.0.1:21000-21032:21000-21032'
     volumes:
       - ftp-data:/data
+    healthcheck:
+      # All three listeners, because this container is three vsftpd instances
+      # and two of them can be answering while the third never bound. 21 and
+      # 2100 greet in the clear; 990 is TLS from the first byte, so its 220
+      # only appears after a handshake.
+      test:
+        - CMD-SHELL
+        - >-
+          nc -w 2 127.0.0.1 21 </dev/null | grep -q '^220' &&
+          nc -w 2 127.0.0.1 2100 </dev/null | grep -q '^220' &&
+          echo QUIT | openssl s_client -connect 127.0.0.1:990 -quiet 2>/dev/null | grep -q '^220'
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
 
   # --- WebDAV ---------------------------------------------------------------
   webdav:
     image: dgraziotin/nginx-webdav-nononsense:latest
+    depends_on:
+      file-seed:
+        condition: service_completed_successfully
     environment:
       WEBDAV_USERNAME: omnifs
       WEBDAV_PASSWORD: omnifs-dev-secret
@@ -89,12 +141,40 @@ services:
       - '127.0.0.1:8081:80'
     volumes:
       - webdav-data:/data
+    healthcheck:
+      # A real PROPFIND rather than a GET: 207 Multi-Status is answered by the
+      # WebDAV module, so this fails while nginx is up but the module is not,
+      # and the credentials are exercised too — `-f` turns the 401 that a
+      # broken htpasswd would return into a failure.
+      test:
+        - CMD-SHELL
+        - >-
+          curl -fsS -o /dev/null -u omnifs:omnifs-dev-secret
+          -X PROPFIND -H 'Depth: 0' http://127.0.0.1/
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+      start_interval: 1s
 
   # Gives the three file servers an identical tree, so the same manual test
   # works against each one. Runs once and exits.
+  #
+  # It seeds the volumes *before* the servers start, and the three servers
+  # above name it as a `service_completed_successfully` dependency, so a
+  # server that reports healthy is a server whose tree is already in place.
+  # Waiting on health would otherwise be half an answer: vsftpd answers 220
+  # from an empty directory just as readily.
+  #
+  # The dependency on `minio-init` is ordering, not data — this job never
+  # touches S3. Chaining the two seeds makes "everything is seeded" a single
+  # observable point, which is what lets the CI job wait for the servers and
+  # get the buckets for free.
   file-seed:
     image: alpine:3.20
-    depends_on: [sftp, ftp, webdav]
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
     entrypoint: ['/bin/sh', '-c']
     command:
       - |
