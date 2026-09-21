@@ -4,9 +4,10 @@ name: Release
 # Open VSX, then attach the same .vsix to a GitHub release.
 #
 # Running it by hand from a branch is a dry run — everything up to the packaged
-# .vsix, uploaded as an artifact, and nothing published. Running it by hand
-# from an existing tag repeats that tag's release, which is how a failed
-# publish is retried.
+# .vsix, uploaded as an artifact, plus a check that the Open VSX token can
+# publish to the namespace, and nothing published. Running it by hand from an
+# existing tag repeats that tag's release, which is how a failed publish is
+# retried.
 on:
   push:
     tags: ['v*']
@@ -120,13 +121,13 @@ jobs:
   open-vsx:
     name: publish to Open VSX
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
-    # The token is an environment secret, not a repository one, so only this
-    # job can read it — and required reviewers on the environment, if set in
-    # the repository settings, become the approval gate before a publish.
+    # OVSX_PAT may be a repository secret or, scoped tighter, a secret on this
+    # environment; either reaches the job. Required reviewers on the
+    # environment, if set in the repository settings, become the approval
+    # gate before a publish.
     #
     # The VS Code Marketplace is published by hand, from the .vsix attached to
     # the GitHub release, so no Marketplace token lives in this repository.
@@ -160,6 +161,10 @@ jobs:
       # makes a retry after a later failure — the GitHub release, say — succeed
       # instead of stopping on "already published".
       #
+      # A dry run stops at `verify-pat`, which asks the registry whether the
+      # token may publish to the namespace, so a bad or expired token shows up
+      # before a tag is pushed rather than after.
+      #
       # The token check lives in the script: the `secrets` context is not
       # available to `if:`, so a guard there would silently skip the publish.
       - name: Publish
@@ -168,8 +173,12 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${OVSX_PAT:-}" ]; then
-            echo "::error::The OVSX_PAT secret is not set on the 'open-vsx' environment."
+            echo "::error::The OVSX_PAT secret is not set."
             exit 1
+          fi
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            pnpm --filter omni-fs-vscode exec ovsx verify-pat ryftcore
+            exit 0
           fi
           VSIX=$(ls "$PWD"/dist-vsix/*.vsix)
           pnpm --filter omni-fs-vscode exec ovsx publish "$VSIX" --skip-duplicate
@@ -177,6 +186,7 @@ jobs:
   github-release:
     name: GitHub release
     needs: [build, open-vsx]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
