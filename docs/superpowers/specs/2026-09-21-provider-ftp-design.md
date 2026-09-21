@@ -474,8 +474,9 @@ on a `550`, logging the loss of atomicity. Per decision 7.
 - **Shrink.** A `421` whose text names a connection limit lowers the ceiling to
   the number of channels currently open, permanently for this session, and the
   lease retries on an existing channel. The instance's `maxConcurrency` follows
-  it down, so `TransferQueue` stops trying to run more transfers than the
-  server will hold.
+  it down — real and observable on the provider — but `TransferQueue` reads it
+  once, at connect, so a ceiling that drops mid-session is not yet something
+  the queue acts on. See decision 3.
 - **Dispose.** `[Symbol.asyncDispose]` closes every channel, idle or leased.
 
 `connect()` is idempotent: it returns immediately when the pool already holds a
