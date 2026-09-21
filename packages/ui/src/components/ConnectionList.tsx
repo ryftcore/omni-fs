@@ -1,7 +1,8 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import type { ProviderId, ProviderSummary } from '@omni-fs/core';
 import type { ConnectionSummary } from '../ports/connections-backend.js';
 import type { Selection } from '../model/reducer.js';
+import { swatchFor } from '../model/swatch.js';
 import { Button, StatusDot } from './primitives/index.js';
 
 export function ConnectionList(props: {
@@ -88,6 +89,7 @@ export function ConnectionList(props: {
                 aria-current={connection.id === selectedId}
                 onClick={() => props.onSelect({ kind: 'connection', id: connection.id })}
               >
+                <ColorBar color={connection.color} />
                 <StatusDot state={connection.state} />
                 <span className="omni-list-item-text">
                   <span className="omni-list-item-label">{connection.label}</span>
@@ -115,5 +117,17 @@ export function ConnectionList(props: {
         </Button>
       </div>
     </div>
+  );
+}
+
+/** Always rendered, transparent when untagged, so every row's dot lines up. */
+function ColorBar(props: { readonly color: string | undefined }): ReactNode {
+  const swatch = swatchFor(props.color);
+  return (
+    <span
+      className="omni-color-bar"
+      aria-hidden="true"
+      style={swatch === undefined ? undefined : ({ '--omni-swatch': swatch } as CSSProperties)}
+    />
   );
 }

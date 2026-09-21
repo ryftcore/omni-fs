@@ -12,6 +12,7 @@ import { sftpProvider } from '@omni-fs/provider-sftp';
 import { webdavProvider } from '@omni-fs/provider-webdav';
 import { OMNI_FS_SCHEME, OmniFileSystemProvider } from './fs/omni-file-system-provider.js';
 import { VsCodeConfigStore, VsCodeLogger, VsCodeSecretStore } from './host/vscode-ports.js';
+import { ConnectionDecorationProvider } from './views/connection-decorations.js';
 import { ConnectionsTreeProvider } from './views/connections-tree.js';
 import { TransfersTreeProvider } from './views/transfers-tree.js';
 import { registerCommands } from './commands/index.js';
@@ -82,6 +83,7 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
   const fileSystemProvider = new OmniFileSystemProvider({ manager, configStore, cache, logger });
   const connectionsTree = new ConnectionsTreeProvider({ manager, configStore, registry, cache });
   const transfersTree = new TransfersTreeProvider(transfers);
+  const decorations = new ConnectionDecorationProvider(configStore);
 
   context.subscriptions.push(
     channel,
@@ -95,6 +97,8 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
       canSelectMany: true,
     }),
     vscode.window.createTreeView('omniFs.transfers', { treeDataProvider: transfersTree }),
+    decorations,
+    vscode.window.registerFileDecorationProvider(decorations),
     ...registerCommands({
       extensionUri: context.extensionUri,
       manager,

@@ -23,6 +23,7 @@ describe('InMemoryConnectionsBackend', () => {
       settings: { host: 'example.com' },
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: { password: { set: 'hunter2' } },
     });
 
@@ -43,6 +44,7 @@ describe('InMemoryConnectionsBackend', () => {
       settings: { host: 'example.com' },
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: { password: { set: 'hunter2' } },
     });
 
@@ -53,6 +55,7 @@ describe('InMemoryConnectionsBackend', () => {
       settings: { host: 'example.com' },
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: {},
     });
 
@@ -68,6 +71,7 @@ describe('InMemoryConnectionsBackend', () => {
       settings: { host: 'example.com' },
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: { password: { set: 'hunter2' } },
     });
 
@@ -78,6 +82,7 @@ describe('InMemoryConnectionsBackend', () => {
       settings: { host: 'example.com' },
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: { password: { clear: true } },
     });
 
@@ -96,6 +101,7 @@ describe('InMemoryConnectionsBackend', () => {
       settings: {},
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: {},
     });
     expect(calls).toBe(1);
@@ -111,8 +117,26 @@ describe('InMemoryConnectionsBackend', () => {
       settings: {},
       rootPath: undefined,
       readOnly: false,
+      color: undefined,
       secretPatch: {},
     });
     expect(calls).toBe(2);
+  });
+
+  it('round-trips a colour', async () => {
+    const api = backend();
+    await api.save({
+      id: undefined,
+      providerId: 'demo',
+      label: 'prod',
+      settings: { host: 'example.com' },
+      rootPath: undefined,
+      readOnly: false,
+      color: 'red',
+      secretPatch: {},
+    });
+
+    const [saved] = await api.listConnections();
+    expect(saved?.color).toBe('red');
   });
 });

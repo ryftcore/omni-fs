@@ -44,9 +44,10 @@ export interface TestConnection {
    *
    * Two consequences for anything written on top of this. Removing the config
    * does not make that connection's URIs stop resolving, so a test asserting
-   * that will not see what it expects. And editing a live connection's config —
-   * flipping `readOnly`, say — has no effect until a fresh connect, which means
-   * a suite wanting different settings needs a different `id`, not a rewrite.
+   * that will not see what it expects. And editing a live connection's config
+   * has no effect until a fresh connect — `readOnly` excepted, which is read on
+   * every operation — so a suite wanting different settings needs a different
+   * `id`, not a rewrite.
    */
   dispose(): Promise<void>;
 }

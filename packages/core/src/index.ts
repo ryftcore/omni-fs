@@ -17,6 +17,8 @@ export type {
   ConnectionState,
   ProviderId,
 } from './model/connection.js';
+export { CONNECTION_COLOR_PRESETS, parseConnectionColor } from './model/connection-color.js';
+export type { ConnectionColor, ConnectionColorPreset } from './model/connection-color.js';
 
 // Errors
 export { OmniFsError } from './errors.js';
@@ -48,6 +50,7 @@ export {
   createDraft,
   isDirty,
   setField,
+  setColor,
   setLabel,
   setReadOnly,
   setRootPath,

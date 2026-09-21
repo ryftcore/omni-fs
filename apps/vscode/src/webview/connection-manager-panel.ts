@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import { mergeSecret, toProviderSummary } from '@omni-fs/core';
+import { mergeSecret, parseConnectionColor, toProviderSummary } from '@omni-fs/core';
 import type {
   ConfigStore,
   ConnectionConfig,
@@ -178,6 +178,7 @@ export class ConnectionManagerPanel {
           settings: config.settings,
           rootPath: config.rootPath,
           readOnly: config.readOnly ?? false,
+          color: config.color,
           // Keys only. The values stay in this process.
           secretFieldsPresent: Object.keys(secret ?? {}),
           state: this.#deps.manager.getState(config.id),
@@ -190,7 +191,9 @@ export class ConnectionManagerPanel {
     const definition = this.#deps.registry.get(input.providerId);
     const id = input.id ?? generateId();
 
-    const stored = await this.#deps.configStore.get(id);
+    // Normalised on this side of the boundary: the webview is a separate
+    // context, and settings.json should only ever hold a colour core can read.
+    const color = parseConnectionColor(input.color)?.value;
 
     const config: ConnectionConfig = {
       id,
@@ -199,10 +202,7 @@ export class ConnectionManagerPanel {
       settings: input.settings,
       readOnly: input.readOnly,
       ...(input.rootPath !== undefined ? { rootPath: input.rootPath } : {}),
-      // `color` is not edited by this UI and is absent from SaveConnectionInput, so it has to be
-      // carried across by hand or a save would delete it. Add any future unmanaged
-      // ConnectionConfig field here too.
-      ...(stored?.color !== undefined ? { color: stored.color } : {}),
+      ...(color !== undefined ? { color } : {}),
     };
 
     const storedSecret = await this.#deps.secretStore.get(id);

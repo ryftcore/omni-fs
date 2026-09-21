@@ -29,7 +29,10 @@ export interface ConnectionConfig {
   readonly settings: Readonly<Record<string, unknown>>;
   /** Path within the remote to treat as the connection root. Defaults to `/`. */
   readonly rootPath?: string | undefined;
-  /** Optional colour/icon hint so prod and staging are visually distinct. */
+  /**
+   * A preset id or `#rrggbb`, so prod and staging are visually distinct. Read
+   * it with `parseConnectionColor`, which ignores anything unrecognised.
+   */
   readonly color?: string | undefined;
   /** When true, all writes are rejected before they reach the provider. */
   readonly readOnly?: boolean | undefined;

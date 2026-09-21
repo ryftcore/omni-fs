@@ -28,6 +28,7 @@ export interface DraftBaseline {
   readonly settings: Readonly<Record<string, unknown>>;
   readonly rootPath: string;
   readonly readOnly: boolean;
+  readonly color: string | undefined;
 }
 
 export interface ConnectionDraft {
@@ -39,6 +40,8 @@ export interface ConnectionDraft {
   readonly secret: Readonly<Record<string, SecretFieldState>>;
   readonly rootPath: string;
   readonly readOnly: boolean;
+  /** A preset id or `#rrggbb`, already normalised; `undefined` for none. */
+  readonly color: string | undefined;
   /** What was loaded, so `isDirty` can compare without a second source. */
   readonly baseline: DraftBaseline;
 }

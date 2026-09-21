@@ -60,6 +60,12 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
     vscode.commands.registerCommand('omniFs.mountAsWorkspaceFolder', (node?: ConnectionNode) =>
       mount(deps, node),
     ),
+    vscode.commands.registerCommand('omniFs.makeReadOnly', (node?: ConnectionNode) =>
+      setReadOnly(deps, node, true),
+    ),
+    vscode.commands.registerCommand('omniFs.makeWritable', (node?: ConnectionNode) =>
+      setReadOnly(deps, node, false),
+    ),
     vscode.commands.registerCommand('omniFs.refresh', () => deps.connectionsTree.refresh()),
     vscode.commands.registerCommand('omniFs.clearCompletedTransfers', () =>
       deps.transfers.clearCompleted(),
@@ -138,6 +144,32 @@ async function disconnect(deps: CommandDeps, node?: ConnectionNode): Promise<voi
   if (config === undefined) return;
   await deps.manager.disconnect(config.id);
   deps.cache.invalidateConnection(config.id);
+  deps.connectionsTree.refresh();
+}
+
+/**
+ * The quick way to lock a connection, without opening the connection manager.
+ *
+ * Saves the flag and nothing else: the connection stays up, because
+ * `OmniFileSystemProvider` reads `readOnly` on every operation rather than
+ * once per connect. Writes are refused from the next one on. An editor
+ * already open keeps the permissions VS Code read when it opened the file.
+ */
+async function setReadOnly(
+  deps: CommandDeps,
+  node: ConnectionNode | undefined,
+  readOnly: boolean,
+): Promise<void> {
+  const picked = await resolveConfig(deps, node);
+  if (picked === undefined) return;
+
+  // A tree node carries the config as it was when the tree was drawn. Write
+  // over the stored one, or an edit saved since would be silently undone.
+  const stored = await deps.configStore.get(picked.id);
+  if (stored === undefined) return;
+
+  const { readOnly: _previous, ...rest } = stored;
+  await deps.configStore.save(readOnly ? { ...rest, readOnly: true } : rest);
   deps.connectionsTree.refresh();
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { initialManagerState, managerReducer } from './reducer.js';
+import { initialManagerState, managerReducer, saveInputFrom } from './reducer.js';
 import type { ManagerAction, ManagerState } from './reducer.js';
 import type { ConnectionSummary } from '../ports/connections-backend.js';
 import type { ProviderSummary } from '@omni-fs/core';
@@ -25,6 +25,7 @@ const prod: ConnectionSummary = {
   settings: { host: 'example.com', port: 21 },
   rootPath: undefined,
   readOnly: false,
+  color: undefined,
   secretFieldsPresent: ['password'],
   state: { status: 'disconnected' },
 };
@@ -133,6 +134,47 @@ describe('managerReducer: editing', () => {
     );
     expect(reverted.draft?.settings['host']).toBe('example.com');
     expect(reverted.dirty).toBe(false);
+  });
+});
+
+describe('managerReducer: colour', () => {
+  const tagged = run([
+    { type: 'loaded', providers: [provider], connections: [{ ...prod, color: 'red' }, staging] },
+  ]);
+
+  it('loads the stored colour into the draft', () => {
+    expect(tagged.draft?.color).toBe('red');
+    expect(tagged.dirty).toBe(false);
+  });
+
+  it('marks the draft dirty on a change and reverts it', () => {
+    const changed = managerReducer(tagged, { type: 'colorChanged', value: '#123456' });
+    expect(changed.draft?.color).toBe('#123456');
+    expect(changed.dirty).toBe(true);
+
+    const reverted = managerReducer(changed, { type: 'reverted' });
+    expect(reverted.draft?.color).toBe('red');
+    expect(reverted.dirty).toBe(false);
+  });
+
+  it('clears with undefined', () => {
+    const cleared = managerReducer(tagged, { type: 'colorChanged', value: undefined });
+    expect(cleared.draft?.color).toBeUndefined();
+    expect(cleared.dirty).toBe(true);
+  });
+
+  it('is sent on save, and is clean once saved', () => {
+    const changed = managerReducer(tagged, { type: 'colorChanged', value: 'blue' });
+    expect(changed.draft && saveInputFrom(changed.draft).color).toBe('blue');
+
+    const saved = run([{ type: 'saveStarted' }, { type: 'saveSucceeded', id: 'c1' }], changed);
+    expect(saved.dirty).toBe(false);
+    expect(saved.draft?.color).toBe('blue');
+  });
+
+  it('is carried into a duplicate, which is most likely the same environment', () => {
+    const copy = managerReducer(tagged, { type: 'duplicateRequested' });
+    expect(copy.draft?.color).toBe('red');
   });
 });
 

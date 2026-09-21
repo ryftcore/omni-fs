@@ -114,10 +114,17 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
     );
 
     item.id = config.id;
-    item.description = provider?.displayName ?? config.providerId;
-    item.contextValue = `connection.${state.status === 'connected' ? 'connected' : 'disconnected'}`;
+    const providerName = provider?.displayName ?? config.providerId;
+    item.description = config.readOnly === true ? `${providerName} · read-only` : providerName;
+    // `connection.<status>.<access>`: the manifest matches on both halves, to
+    // offer Connect or Disconnect and Make Read-only or Make Writable.
+    item.contextValue = `connection.${state.status === 'connected' ? 'connected' : 'disconnected'}.${
+      config.readOnly === true ? 'readOnly' : 'writable'
+    }`;
     item.iconPath = statusIcon(state);
     item.tooltip = buildTooltip(config, state, provider?.displayName);
+    // Also what tints the label: `ConnectionDecorationProvider` colours every
+    // resource of a tagged connection, this node included.
     item.resourceUri = OmniFileSystemProvider.toUri(config.id, RemotePath.ROOT);
 
     return item;
