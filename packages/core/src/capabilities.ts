@@ -46,8 +46,15 @@ export interface ProviderCapabilities {
   /** Whether stat/list return an etag usable for conflict detection. */
   readonly hasVersionTokens: boolean;
   /**
-   * Safe number of in-flight operations on one connection. FTP is typically 1
-   * (one control channel); S3 is happy with 16+. The transfer queue reads this.
+   * Safe number of in-flight operations this connection can carry. S3 is happy
+   * with 16+ over one HTTPS client.
+   *
+   * FTP carries one command per control connection, so `provider-ftp` answers
+   * with the size of its channel pool — a per-connection setting, which also
+   * falls when a server refuses another login. That makes this the first
+   * capability whose value is neither a constant nor a property of the server,
+   * and it is safe because `TransferQueue` reads it at call time rather than
+   * caching it at connect.
    */
   readonly maxConcurrency: number;
   /** Whether `list()` is naturally paginated and may be expensive. */
