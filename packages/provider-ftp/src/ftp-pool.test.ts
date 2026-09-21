@@ -390,31 +390,67 @@ describe('FtpPool', () => {
     pool.release(channel);
   });
 
-  it('does not let a late abort disturb a waiter the release already served', async () => {
-    // The release and the abort must not both act on the queue for one
-    // waiter, or the abort evicts whoever is standing behind it instead.
+  // A wakeup goes to exactly one waiter, so whoever it wakes owes it back to
+  // the queue if it cannot use it. `release` shifts the waiter off the queue
+  // and resolves it, which detaches its abort listener — so an abort landing
+  // after that and before the waiter's continuation runs removes it from
+  // nothing. The waiter then throws `Cancelled`, which is right, while the
+  // release it consumed must still reach the caller behind it.
+  it('hands the wakeup on when the waiter it woke aborts before resuming', async () => {
     const pool = poolOf(1);
     const controller = new AbortController();
-    let finish: (() => void) | undefined;
 
-    const held = pool.lease(
-      async () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
-    const served = pool.acquire(controller.signal);
+    const held = await pool.acquire();
+    const aborting = pool.acquire(controller.signal);
     const behind = pool.acquire();
     await settle();
 
-    finish?.();
-    await held;
-    const channel = await served;
+    // Both of these run in one synchronous stretch, which is the whole
+    // point: the abort lands inside the window `release` opened.
+    pool.release(held);
     controller.abort();
 
+    await expect(aborting).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled',
+    );
+    expect(await behind).toBe(held);
+    pool.release(held);
+  }, 2_000);
+
+  // The same lost wakeup without an abort anywhere, at the shipped default
+  // ceiling of one. The release discards a channel the server idled out, so it
+  // frees a slot rather than handing a channel on; the waiter it wakes then
+  // fails to open a replacement. A transient refusal must stay an error its
+  // own caller can retry, not wedge everyone queued behind it.
+  it('hands the wakeup on when the waiter it woke fails to open a channel', async () => {
+    let opened = 0;
+    const pool = new FtpPool({
+      maxConnections: 1,
+      logger: NOOP_LOGGER,
+      open: async () => {
+        opened += 1;
+        if (opened === 2) throw replyError(425, '425 Cannot open data connection');
+        return fakeChannel();
+      },
+    });
+
+    const held = (await pool.acquire()) as FakeChannel;
+    const failing = pool.acquire();
+    const behind = pool.acquire();
+    await settle();
+
+    held.alive = false;
+    pool.release(held);
+
+    await expect(failing).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'ConnectionFailed',
+    );
+    const channel = await behind;
+    expect(channel.isAlive()).toBe(true);
+    expect(channel).not.toBe(held);
+    expect(opened).toBe(3);
     pool.release(channel);
-    expect(await behind).toBe(channel);
-  });
+  }, 2_000);
 
   it('rejects everyone still queued when the pool closes', async () => {
     const pool = poolOf(1);

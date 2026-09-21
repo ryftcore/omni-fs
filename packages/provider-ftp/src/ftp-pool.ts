@@ -59,36 +59,52 @@ export class FtpPool {
   }
 
   async acquire(signal?: AbortSignal): Promise<FtpChannel> {
-    for (;;) {
-      if (this.#closed) throw closedError();
-      throwIfAborted(signal, 'FTP connection');
+    // A wakeup is a one-shot signal to exactly one waiter, so a pass that
+    // consumed one and then leaves empty-handed has to hand it on or every
+    // caller behind it waits for a release that has already happened. Two ways
+    // out of this loop do that: the abort check below, for a signal that fired
+    // after `release` detached its listener but before this continuation ran,
+    // and a failed `#openOne` on the slot the release just freed.
+    let woken = false;
+    try {
+      for (;;) {
+        if (this.#closed) throw closedError();
+        throwIfAborted(signal, 'FTP connection');
 
-      const idle = this.#idle.pop();
-      if (idle !== undefined) {
-        if (idle.isAlive()) return idle;
-        // The server idles a connection out after a few minutes and says
-        // nothing until the next command. Replacing it before the operation
-        // starts is pool bookkeeping, not a retry: a channel that dies *during*
-        // an operation surfaces `ConnectionFailed{retryable}` and is core's to
-        // reconnect, through the `isAlive()` check in `ConnectionManager`.
-        this.#discard(idle);
-        continue;
+        const idle = this.#idle.pop();
+        if (idle !== undefined) {
+          if (idle.isAlive()) return idle;
+          // The server idles a connection out after a few minutes and says
+          // nothing until the next command. Replacing it before the operation
+          // starts is pool bookkeeping, not a retry: a channel that dies
+          // *during* an operation surfaces `ConnectionFailed{retryable}` and is
+          // core's to reconnect, through `ConnectionManager`'s `isAlive()`
+          // check.
+          this.#discard(idle);
+          continue;
+        }
+
+        if (this.#live.size + this.#opening < this.#ceiling) {
+          const opened = await this.#openOne(signal);
+          if (opened !== undefined) return opened;
+          continue;
+        }
+
+        await this.#waitForRelease(signal);
+        // Going round again re-queues this caller, so the wakeup is not lost
+        // by looping — only by leaving.
+        woken = true;
       }
-
-      if (this.#live.size + this.#opening < this.#ceiling) {
-        const opened = await this.#openOne(signal);
-        if (opened !== undefined) return opened;
-        continue;
-      }
-
-      await this.#waitForRelease(signal);
+    } catch (error) {
+      if (woken) this.#wakeOne();
+      throw error;
     }
   }
 
   release(channel: FtpChannel): void {
     if (this.#closed || !channel.isAlive()) this.#discard(channel);
     else this.#idle.push(channel);
-    this.#waiters.shift()?.resolve();
+    this.#wakeOne();
   }
 
   async lease<T>(body: (channel: FtpChannel) => Promise<T>, signal?: AbortSignal): Promise<T> {
@@ -150,11 +166,28 @@ export class FtpPool {
     });
   }
 
+  /**
+   * Tells one waiter that something changed — a channel went idle, or a slot
+   * came free. Whoever it wakes owns the signal from then on, and owes it back
+   * to the queue if it cannot use it.
+   */
+  #wakeOne(): void {
+    this.#waiters.shift()?.resolve();
+  }
+
   #discard(channel: FtpChannel): void {
     this.#live.delete(channel);
     void channel.close().catch(() => undefined);
   }
 
+  /**
+   * PRECONDITION: `signal` is not already aborted. `addEventListener` on an
+   * aborted signal never fires, so a waiter queued with one would sit here
+   * forever. That holds today only because `acquire`'s `throwIfAborted` runs in
+   * the same synchronous stretch as every call that reaches this method — an
+   * `await` inserted between the two breaks it silently, with no test failure
+   * short of a hang.
+   */
   async #waitForRelease(signal?: AbortSignal): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       // `onAbort` names `waiter` and `waiter` names `onAbort`, so one of the
@@ -177,6 +210,14 @@ export class FtpPool {
       // Detaching on settle is what keeps a release and an abort from both
       // acting on one waiter: once `release` has shifted it off the queue and
       // resolved it, a later abort on the same signal reaches nothing.
+      //
+      // It is also not optional housekeeping. `ManagedFileSystem` threads ONE
+      // `AbortSignal` through every call of a recursive delete or copy walk, so
+      // without the detach each queued lease leaves a listener on it for the
+      // length of the walk: `MaxListenersExceededWarning` on the signal, and
+      // every settled waiter's closure retained behind it. Deleting these two
+      // lines is a defect, not a cleanup — nothing observable in this file
+      // changes, which is exactly why it needs saying here.
       const waiter: PoolWaiter = {
         resolve: () => {
           signal?.removeEventListener('abort', onAbort);
