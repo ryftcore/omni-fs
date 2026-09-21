@@ -34,6 +34,8 @@ quickly.
   21 and implicit TLS on 990, replacing `delfer/alpine-ftp-server`.
 - A pool of control channels, sized per connection by a new setting, defaulting
   to one and shrinking itself when the server refuses another login.
+- A `tlsMinVersion` setting that makes a legacy FTPS server reachable, proven
+  against a TLS 1.0 listener rather than asserted.
 - A `conformance-live` CI job, which runs the live suite for all four providers
   rather than for FTP alone.
 - `pnpm test` stays hermetic and green without Docker.
@@ -61,7 +63,7 @@ quickly.
 
 ## Decisions
 
-Nine rulings, each of which changes what gets written.
+Ten rulings, each of which changes what gets written.
 
 ### 1. Keep `basic-ftp`. There is no library question here
 
@@ -206,7 +208,45 @@ provider deletes the destination and retries once, **logging that the replace
 was not atomic** — the same warning `provider-sftp` emits on a server without
 POSIX rename, and which its live suite asserts on.
 
-### 8. All three TLS modes are proven live, against a container built here
+### 8. TLS version is one setting, and it carries the security level with it
+
+Node 22 refuses anything below TLS 1.2 by default. That default is right for
+new code and wrong for FTPS, which is exactly where the servers that never
+moved past TLS 1.0 still live — vsftpd 2.x, IIS 6 and 7, ProFTPD builds from
+the same era. A provider that cannot reach them has implemented FTPS for the
+servers that least need a dedicated client.
+
+So `tlsMinVersion` is a setting: `auto`, `TLSv1.3`, `TLSv1.2`, `TLSv1.1`,
+`TLSv1`. It becomes `secureOptions.minVersion`, which `basic-ftp` keeps as
+`ftp.tlsOptions` and spreads into every data connection's `tls.connect`
+(`transfer.js:128`) — so the control channel and the transfers agree by
+construction. That matters more than it looks: a mismatch would fail the data
+connection rather than the login, which is a far worse error to be handed.
+
+**Choosing below TLS 1.2 also relaxes OpenSSL's security level**, by adding
+`DEFAULT@SECLEVEL=0` to the cipher string. This is the part that makes the
+setting work rather than merely exist: OpenSSL 3 rejects the 1024-bit DH
+parameters and legacy signature algorithms those servers offer _regardless_ of
+the protocol version, so a version-only knob would be set correctly by the user
+and still fail the handshake — and the second knob needed to finish the job is
+undiscoverable precisely when it is needed. Coupling them makes the setting
+mean "talk to this old server", which is the only thing anyone sets it for.
+
+The relaxation is logged at `warn`, naming the connection, exactly as
+`allowSelfSigned` is. Weakened crypto is never silent, even when it is implied.
+
+Two things are deliberately absent. There is **no maximum version**: a server
+that breaks on a TLS 1.3 handshake is rarer than one that needs TLS 1.0, and
+adding the field later is one line with no design consequence. And the default
+is **`auto`, not a named version** — Node's floor moves with Node, and writing
+`TLSv1.2` here would freeze this provider's floor on the day Node raises its
+own.
+
+The setting is ignored when `secure: 'none'`, where there is no TLS to
+configure, rather than being rejected: a user toggling encryption off and back
+on should not lose the rest of their form.
+
+### 9. All three TLS modes are proven live, against a container built here
 
 `delfer/alpine-ftp-server` serves plain FTP only, so today there is nothing in
 the compose stack to run the suite against over TLS. A provider whose settings
@@ -229,7 +269,7 @@ The certificate is self-signed and generated at build, which makes
 connections for precisely this reason, and proving that path is worth more than
 an easy green. See Risks for what happens if it does not hold.
 
-### 9. CI runs the live conformance suite, for all four providers
+### 10. CI runs the live conformance suite, for all four providers
 
 Nothing in CI runs `pnpm test:conformance` today. The live suite is
 developer-run, and the compose stack is started only for
@@ -286,23 +326,26 @@ Outside the package: `docker/ftp/`, the FTP services in `compose.yaml`, the
 
 ## Settings and secrets
 
-The skeleton's schema survives with one field added. Settings, all committable
+The skeleton's schema survives with two fields added. Settings, all
+committable
 through `omniFs.connections`:
 
-| Key               | Kind    | Notes                                                           |
-| ----------------- | ------- | --------------------------------------------------------------- |
-| `host`            | text    | required                                                        |
-| `port`            | number  | default 21; implicit TLS normally wants 990                     |
-| `username`        | text    | required                                                        |
-| `secure`          | select  | `explicit` \| `implicit` \| `none`, default `explicit`          |
-| `allowSelfSigned` | boolean | default false; disables certificate verification                |
-| `maxConnections`  | number  | **new.** 1–8, default 1. The pool ceiling, and `maxConcurrency` |
-| `rootPrefix`      | text    | see below                                                       |
+| Key               | Kind    | Notes                                                                             |
+| ----------------- | ------- | --------------------------------------------------------------------------------- |
+| `host`            | text    | required                                                                          |
+| `port`            | number  | default 21; implicit TLS normally wants 990                                       |
+| `username`        | text    | required                                                                          |
+| `secure`          | select  | `explicit` \| `implicit` \| `none`, default `explicit`                            |
+| `allowSelfSigned` | boolean | default false; disables certificate verification                                  |
+| `maxConnections`  | number  | **new.** 1–8, default 1. The pool ceiling, and `maxConcurrency`                   |
+| `tlsMinVersion`   | select  | **new.** `auto` \| `TLSv1.3` \| `TLSv1.2` \| `TLSv1.1` \| `TLSv1`, default `auto` |
+| `rootPrefix`      | text    | see below                                                                         |
 
 The secret is `password`, and goes only through `SecretStore`.
 
 `readSettings()` rejects a missing `host` or `username`, an unknown `secure`
-value, a port outside 1–65535 and a `maxConnections` outside 1–8, all with
+value, an unknown `tlsMinVersion`, a port outside 1–65535 and a
+`maxConnections` outside 1–8, all with
 `ProtocolError` — the same local-validation line `provider-sftp` and
 `provider-webdav` draw, so a typo is caught before it becomes a server round
 trip reported in the server's words. A missing password is
@@ -313,6 +356,10 @@ should accept, and a user who needs plain FTP has made that choice knowingly.
 The port is not defaulted per mode: a select cannot change a number field's
 default, and silently rewriting a port the user typed is worse than the help
 text on the `implicit` option that already names 990.
+
+`tlsMinVersion` carries help text saying what decision 8 decided: that anything
+below TLS 1.2 also relaxes OpenSSL's cipher policy, and that it is for reaching
+an old server rather than for tuning a good one.
 
 ## Path model
 
@@ -483,6 +530,15 @@ accept is pure cost, and the difference between a message that names the
 setting and one that says `self signed certificate` is the difference between a
 ten-second fix and a bug report.
 
+**TLS protocol failures get the same treatment**, for the same reason.
+`ERR_SSL_UNSUPPORTED_PROTOCOL`, `ERR_SSL_WRONG_VERSION_NUMBER`,
+`ERR_SSL_TLSV1_ALERT_PROTOCOL_VERSION`, and the `EPROTO` handshake failures
+whose message says `no protocols available`, `unsupported protocol` or
+`dh key too small`, become a **non-retryable** `ConnectionFailed` naming the
+_Minimum TLS version_ setting. `dh key too small` belongs in that list rather
+than with the certificate failures because it is the security level talking,
+and the security level is what that setting moves.
+
 **550 is the ambiguous one**, as status 4 is for SFTP. Servers answer it for
 "no such file", for "permission denied", for "directory not empty" and for a
 generic refusal. Unlike SFTP's status 4 it cannot fall through to `Unknown`:
@@ -513,6 +569,10 @@ do on demand:
 - a `LIST`-only server yielding entries with `mtime` undefined
 - a write stream whose final reply the server rejects after `close()`
 - a `421` shrinking the ceiling, and `maxConcurrency` following it down
+- the `secureOptions` assembled for each `tlsMinVersion`: the security level
+  relaxed below TLS 1.2, untouched at `auto`, and the whole object absent under
+  `secure: 'none'`
+- a protocol-version handshake failure arriving with the setting's name in it
 
 **Live** (`pnpm test:conformance`, with `docker compose up -d`).
 `runConformanceSuite()` runs three times against `docker/ftp` as `omnifs`, with
@@ -522,6 +582,8 @@ absolute-prefix rule:
 - `secure: 'none'` on 2121
 - `secure: 'explicit'` on 2121
 - `secure: 'implicit'` on 2990
+- `secure: 'explicit'` with `tlsMinVersion: 'TLSv1'` on 2100, the legacy
+  listener
 
 Each case makes and removes its own `/conformance-<timestamp>-<n>` directory,
 so the seeded tree is identical before and after, as the WebDAV and SFTP runs
@@ -537,6 +599,13 @@ certificate with the message that names the setting, that a listing over
 `MLSD` carries `mtime`, that the non-atomic rename warning is emitted, and that
 `maxConnections: 3` genuinely overlaps three transfers.
 
+Two more belong to `tlsMinVersion`, and they pull in opposite directions on
+purpose. Lowering the floor must not break a good server: the modern listener
+still connects at `tlsMinVersion: 'TLSv1'`, negotiating 1.3 as it would have
+anyway. And raising it must bite: `tlsMinVersion: 'TLSv1.3'` against the legacy
+listener fails, with the message that names the setting. A knob that is only
+ever tested in the direction that succeeds has not been tested.
+
 ## Test server
 
 `docker/ftp/Dockerfile` — Alpine plus vsftpd, digest-pinned and multi-arch,
@@ -546,38 +615,47 @@ the seeded volume at `/data` as `docker/sftp` does, and generates a self-signed
 certificate with `subjectAltName` covering `localhost`
 and `127.0.0.1`.
 
-Two configurations, one entrypoint:
+Three configurations, one entrypoint:
 
-|                | explicit                            | implicit             |
-| -------------- | ----------------------------------- | -------------------- |
-| port           | 21                                  | 990                  |
-| `ssl_enable`   | `YES`                               | `YES`                |
-| `implicit_ssl` | `NO`                                | `YES`                |
-| forced TLS     | no — plain and `AUTH TLS` both work | yes, by construction |
-| passive range  | 21000–21010                         | 21011–21021          |
+|                | explicit                            | implicit             | legacy               |
+| -------------- | ----------------------------------- | -------------------- | -------------------- |
+| port           | 21                                  | 990                  | 2100                 |
+| `ssl_enable`   | `YES`                               | `YES`                | `YES`                |
+| `implicit_ssl` | `NO`                                | `YES`                | `NO`                 |
+| forced TLS     | no — plain and `AUTH TLS` both work | yes, by construction | yes                  |
+| protocol       | whatever both ends agree on         | same                 | TLS 1.0 only         |
+| `ssl_ciphers`  | default                             | default              | `DEFAULT@SECLEVEL=0` |
+| passive range  | 21000–21010                         | 21011–21021          | 21022–21032          |
 
-Both enable `write_enable`, keep `require_ssl_reuse` at its default, and set
-`pasv_address` for the published ports. Neither chroots the user: the login
+All three enable `write_enable`, keep `require_ssl_reuse` at its default, and
+set `pasv_address` for the published ports. None chroots the user: the login
 directory is `/data` and the server's filesystem root stays reachable, which is
 what gives the absolute `rootPrefix` rule something real to name — the same
 reason `docker/sftp` does not chroot either. The entrypoint starts the implicit
-instance in the background and `exec`s the explicit one, so the container's
-main process is a real server rather than a shell.
+and legacy instances in the background and `exec`s the explicit one, so the
+container's main process is a real server rather than a shell.
 
-`compose.yaml` publishes 2121→21, 2990→990 and both passive ranges, and its
-FTP comment — which currently explains that the provider is a skeleton whose
-server exists "to exercise the connection form now" — is replaced by one saying
-what the two listeners are for.
+The legacy listener exists for one reason: `tlsMinVersion` is a setting whose
+whole purpose is reaching a server this stack would otherwise not contain, and
+decision 9's argument — that a schema offering three modes while testing one
+has two untested modes — applies to it unchanged. It pins `ssl_tlsv1` on with
+`ssl_sslv2`/`ssl_sslv3` off and a security level of 0, which is the
+configuration a real 2012-era server has by accident.
+
+`compose.yaml` publishes 2121→21, 2990→990, 2100→2100 and all three passive
+ranges, and its FTP comment — which currently explains that the provider is a
+skeleton whose server exists "to exercise the connection form now" — is
+replaced by one saying what the three listeners are for.
 
 ## Tooling and docs
 
 - `packages/provider-ftp/package.json`: `test` becomes `vitest run`, and
   `test:conformance` is added, matching the other three providers.
-- `.github/workflows/ci.yml`: the `conformance-live` job, per decision 9.
+- `.github/workflows/ci.yml`: the `conformance-live` job, per decision 10.
 - `packages/core/src/capabilities.ts`: the `maxConcurrency` comment stops
   saying FTP is "typically 1" and says what the number now means.
 - `docker/README.md`: the FTP section moves out of "not yet implemented", names
-  the two listeners, the credentials and the root prefix.
+  the three listeners, the credentials and the root prefix.
 - `README.md`: tick the FTP roadmap line and move the table row to
   ✅ Implemented — which makes it the last one.
 - `CLAUDE.md`: the "Current state" paragraph stops calling FTP a deliberate
@@ -597,10 +675,18 @@ what the two listeners are for.
   untested here, not a silent flip. Establishing which it is comes first in
   implementation, because it decides whether two of the three live runs can
   exist at all.
-- **Two vsftpd instances in one container.** The alternative is two services in
-  `compose.yaml` sharing a volume, which doubles the seeding problem. If the
-  single container proves awkward, splitting it is a compose change and no
-  provider change.
+- **Three vsftpd instances in one container.** The alternative is three
+  services in `compose.yaml` sharing a volume, which triples the seeding
+  problem. If the single container proves awkward, splitting it is a compose
+  change and no provider change.
+- **The legacy listener may not be buildable.** Alpine's OpenSSL 3 can have
+  TLS 1.0 compiled out entirely, in which case no vsftpd setting brings it
+  back and `ssl_ciphers=DEFAULT@SECLEVEL=0` changes nothing. The fallback is to
+  drop that listener, keep the low-version path covered by the hermetic
+  assertion on the assembled `secureOptions`, and say plainly in
+  `docker/README.md` that no server here speaks TLS 1.0 — not to quietly leave
+  a live test that proves less than its name claims. This is worth
+  establishing early, alongside `require_ssl_reuse`.
 - **`MLST` parsing is ours.** RFC 3659's fact syntax is simple, but servers
   emit facts we do not know and occasionally malform the ones we do. An
   unparseable response falls back to the parent listing rather than failing the
