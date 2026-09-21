@@ -345,6 +345,15 @@ export class FtpFileSystem implements RemoteFileSystem {
    * pooled channel somewhere the next lease does not expect. An existing
    * directory is success: servers answer 550 or 521 for it and disagree about
    * which, so neither can be read as a failure here.
+   *
+   * A 550 is also how vsftpd and pure-ftpd both answer a permission-denied
+   * `MKD` — the exact same reply code as "already exists" — so the raw code
+   * alone cannot tell the two apart. `toOmniFsError` has already done that
+   * work by the time this catches the error (a `550 Permission denied`
+   * reaches here as `code: 'PermissionDenied'`, message-classified before the
+   * channel ever threw), so this checks *that* classification first and lets
+   * a permission failure propagate as `PermissionDenied` rather than being
+   * swallowed as though the directory were simply there already.
    */
   async #mkdirp(
     channel: FtpChannel,
@@ -357,6 +366,7 @@ export class FtpFileSystem implements RemoteFileSystem {
       try {
         await channel.mkdir(this.#remote(current), signal);
       } catch (error) {
+        if (OmniFsError.is(error) && error.code === 'PermissionDenied') throw error;
         if (!isReplyCode(error, 550, 521)) throw error;
       }
     }

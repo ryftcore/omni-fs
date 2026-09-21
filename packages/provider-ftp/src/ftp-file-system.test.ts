@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { NOOP_LOGGER, OmniFsError, RemotePath, collectStream } from '@omni-fs/core';
 import type { ConnectionConfig, ProviderContext } from '@omni-fs/core';
+import { toOmniFsError } from './errors.js';
 import { FTP_CAPABILITIES, FtpFileSystem } from './ftp-file-system.js';
 import type { FtpChannel } from './ftp-channel.js';
 import type { FtpEntry } from './ftp-helpers.js';
@@ -26,6 +27,18 @@ interface FakeChannelOptions {
 
 function entry(name: string, overrides: Partial<FtpEntry> = {}): FtpEntry {
   return { name, type: 'file', size: 0, mtime: undefined, mode: undefined, ...overrides };
+}
+
+/**
+ * What a real `FtpControlChannel` throws for a permission-denied `MKD`: a 550
+ * reply, already classified by `toOmniFsError` (`errors.test.ts` pins that
+ * classification). vsftpd and pure-ftpd both answer "directory already
+ * exists" with the same 550, so a fixture keyed only on the raw reply code
+ * cannot exercise this — the message is what makes it PermissionDenied rather
+ * than the default NotFound.
+ */
+function lockedDirectoryError(path: string): Error {
+  return toOmniFsError(Object.assign(new Error('550 Permission denied.'), { code: 550 }), path);
 }
 
 function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
@@ -497,6 +510,25 @@ describe('writing', () => {
     ).resolves.toBeUndefined();
   });
 
+  // vsftpd and pure-ftpd both answer a permission-denied `MKD` with the same
+  // 550 they use for "already exists" — the raw reply code cannot tell them
+  // apart. `#mkdirp` used to swallow both alike, which meant a write against
+  // a locked parent did not fail at all: it skipped straight to `upload`
+  // as though the directory had been there all along.
+  it('propagates a permission-denied 550 while creating a missing parent, instead of writing as though it had succeeded', async () => {
+    const channel = fakeChannel();
+    channel.mkdir = async () => {
+      throw lockedDirectoryError('/locked');
+    };
+    const fs = await connected(channel);
+    await expect(
+      fs.writeFile(RemotePath.parse('/locked/a.txt'), new Uint8Array([1])),
+    ).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'PermissionDenied',
+    );
+    expect(channel.calls.some((call) => call.startsWith('upload'))).toBe(false);
+  });
+
   it('does not create parents when asked not to', async () => {
     const channel = fakeChannel();
     const fs = await connected(channel);
@@ -612,6 +644,21 @@ describe('createDirectory', () => {
     const fs = await connected(channel);
     await expect(fs.createDirectory?.(RemotePath.parse('/docs'))).rejects.toSatisfy(
       (error: unknown) => OmniFsError.is(error) && error.code === 'AlreadyExists',
+    );
+  });
+
+  // The bug this pins: swallowing every 550 meant a locked `MKD` was
+  // indistinguishable from an existing directory, and the failure only
+  // resurfaced once the follow-up stat found nothing there — misreported as
+  // `NotFound` for a directory that was never missing, only unreachable.
+  it('propagates permission denied rather than reporting a locked directory as missing', async () => {
+    const channel = fakeChannel();
+    channel.mkdir = async () => {
+      throw lockedDirectoryError('/locked');
+    };
+    const fs = await connected(channel);
+    await expect(fs.createDirectory?.(RemotePath.parse('/locked'))).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'PermissionDenied',
     );
   });
 });
