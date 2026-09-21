@@ -3,7 +3,7 @@
 Odd minor versions (0.1.x, 0.3.x) are pre-releases; even minor versions are
 stable.
 
-## Unreleased
+## 0.1.3
 
 ### Fixed
 
