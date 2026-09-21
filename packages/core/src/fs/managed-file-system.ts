@@ -273,7 +273,19 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
       options?.signal ? { signal: options.signal } : undefined,
     );
 
-    if (this.#inner.createWriteStream !== undefined && this.#inner.capabilities.canStreamWrite) {
+    // Piping holds a read stream and a write stream open at once, which is two
+    // operations in flight on one connection. `maxConcurrency` is the
+    // provider's own declaration of how many it can carry, and at 1 the second
+    // acquire queues behind a stream that cannot drain until it is granted:
+    // `provider-ftp` at its default `maxConnections: 1` wedges there forever —
+    // no timeout, and VS Code's copy passes no signal to cancel it — taking
+    // every later call on that connection down with it. A provider that raises
+    // its ceiling gets this path back automatically.
+    if (
+      this.#inner.createWriteStream !== undefined &&
+      this.#inner.capabilities.canStreamWrite &&
+      this.#inner.capabilities.maxConcurrency >= 2
+    ) {
       const sink = await this.#inner.createWriteStream(
         to,
         options?.signal ? { signal: options.signal } : undefined,
@@ -282,9 +294,13 @@ export class ManagedFileSystem implements RemoteFileSystem, AsyncDisposable {
       return;
     }
 
-    // Last resort: buffer. Only reached on a provider that can neither copy
-    // server-side nor stream a write, which should be rare and is worth a log
-    // line when it happens to a large file.
+    // Buffer instead. Two different providers land here: one that can neither
+    // copy server-side nor stream a write, and — because of the gate above —
+    // one whose connection carries a single operation at a time. The cost is
+    // stated rather than hidden: this holds the *whole file* in memory before a
+    // byte of it is written, so a copy costs its own size in RAM. For the
+    // single-channel case that is the price of not deadlocking the connection.
+    // The log line is where a large one becomes visible.
     const buffered = await collectStream(source);
     this.#logger.log('debug', 'Buffering copy in memory', {
       from: from.value,
