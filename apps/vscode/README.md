@@ -7,10 +7,24 @@ download, no re-upload, no separate window.
 
 ![Browsing an S3 bucket and editing a remote file in a normal VS Code editor](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/browse-and-edit.png)
 
-> **Beta (`0.1.0-beta.1`).** The published build ships the S3 provider alone.
-> SFTP and WebDAV are implemented on `main` and will land in the next release;
-> FTP is still scaffolding. Read [Status](#status) and the
-> [changelog](CHANGELOG.md) before installing.
+[![Open VSX](https://img.shields.io/open-vsx/v/ryftcore/omni-fs-vscode?label=Open%20VSX)](https://open-vsx.org/extension/ryftcore/omni-fs-vscode)
+
+> **Pre-release.** Every protocol listed below works, but Omni-FS is pre-1.0 and
+> still has gaps — read [Status](#status) and the [changelog](https://github.com/ryftcore/omni-fs/blob/main/apps/vscode/CHANGELOG.md) before
+> installing.
+
+## Install
+
+- **VS Code Marketplace** — search for **Omni-FS** in the Extensions view, or
+  open [its page](https://marketplace.visualstudio.com/items?itemName=ryftcore.omni-fs-vscode).
+- **Open VSX** — for VSCodium, Cursor, Gitpod and other editors that use it:
+  [open-vsx.org/extension/ryftcore/omni-fs-vscode](https://open-vsx.org/extension/ryftcore/omni-fs-vscode).
+- **A `.vsix` file** — download one from
+  [GitHub Releases](https://github.com/ryftcore/omni-fs/releases) and run
+  **Extensions: Install from VSIX…**.
+
+Releases are pre-releases for now, so on the Marketplace choose **Switch to
+Pre-Release Version** if it offers you nothing to install.
 
 ## What it does
 
@@ -24,25 +38,29 @@ download, no re-upload, no separate window.
   cancellation.
 - **Protocol-aware behaviour.** Each backend declares what it can genuinely do,
   and Omni-FS adapts instead of failing after you click. S3 has no real
-  directories, so a new folder appears once it holds a file. FTP allows one
-  operation at a time, so bulk work serialises there while S3 runs sixteen
-  transfers in parallel. You don't have to think about any of it.
+  directories, so a new folder appears once it holds a file. An FTP connection
+  carries one operation at a time, so bulk work serialises there — unless you
+  allow it more connections — while S3 runs sixteen transfers in parallel. You
+  don't have to think about any of it.
+- **Colour-tagged connections**, so production is hard to mistake for staging.
+  The colour follows the connection's files into the Explorer and editor tabs.
+- **Read-only connections**, switched from the tree's context menu and applied
+  to the next write without reconnecting.
 
 ## Status
 
-| Protocol               | Status                     | Notes                                                                 |
-| ---------------------- | -------------------------- | --------------------------------------------------------------------- |
-| **S3 / S3-compatible** | ✅ Implemented, published  | AWS S3, MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Ceph |
-| **SFTP (SSH)**         | ✅ Implemented, unreleased | Password, private key, SSH agent                                      |
-| **WebDAV**             | ✅ Implemented, unreleased | Nextcloud, ownCloud                                                   |
-| **FTP / FTPS**         | 🚧 Scaffolded              | Explicit and implicit TLS planned                                     |
+| Protocol               | Status     | Notes                                                                 |
+| ---------------------- | ---------- | --------------------------------------------------------------------- |
+| **S3 / S3-compatible** | ✅ Working | AWS S3, MinIO, Cloudflare R2, Backblaze B2, DigitalOcean Spaces, Ceph |
+| **SFTP (SSH)**         | ✅ Working | Password, private key, SSH agent                                      |
+| **WebDAV**             | ✅ Working | Nextcloud, ownCloud                                                   |
+| **FTP / FTPS**         | ✅ Working | Explicit and implicit TLS, configurable minimum TLS version           |
 
-"Unreleased" means the provider passes the shared conformance suite against a
-real server but is not in `0.1.0-beta.1` yet; the screenshots on this page are
-taken from `main`.
+Each protocol passes the same conformance suite against a real server of its
+kind in CI.
 
-Download and upload commands are also not wired up yet. Everything else listed
-above works against every implemented protocol.
+The **Download…** and **Upload…** commands are not wired up yet. Everything else
+listed above works against every protocol.
 
 ![The same sidebar browsing S3, SFTP and WebDAV side by side](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/protocols.png)
 
@@ -73,6 +91,32 @@ Leave **Endpoint** empty for AWS. For anything else, set it and turn on
 
 **Root prefix** scopes a connection to a subfolder of the bucket, which is handy
 for keeping a production connection pointed at exactly one deploy directory.
+
+### Connecting over FTP / FTPS
+
+Pick the **Encryption** that matches the server:
+
+| Encryption              | Port | When                                                           |
+| ----------------------- | ---- | -------------------------------------------------------------- |
+| FTPS — explicit TLS     | 21   | The default, and what most servers mean by "FTPS" (AUTH TLS)   |
+| FTPS — implicit TLS     | 990  | Servers that expect TLS from the first byte                    |
+| Plain FTP — unencrypted | 21   | Only on a network you trust: the password is sent in the clear |
+
+- **Minimum TLS version** is _Automatic_ by default. Choose TLS 1.0 or 1.1 only
+  to reach an old server that offers nothing newer — it also relaxes the cipher
+  policy those servers need.
+- **Allow self-signed certificates** turns off certificate verification. Use it
+  only for a server you control.
+- **Maximum connections** defaults to 1. FTP carries one command per
+  connection, so with one, browsing waits behind a transfer. Raising it (up to 8) opens more logins so they run side by side. If the server refuses the
+  extra logins, Omni-FS drops back to the number it accepted instead of
+  failing.
+- **Root prefix** scopes the connection to a subfolder of the login directory,
+  or to an absolute server path if it begins with `/`.
+
+Listings use `MLSD`/`MLST` where the server offers them, for exact sizes and
+timestamps, and fall back to parsing `LIST` where it does not. Rename and delete
+work on directories too, and a recursive delete walks the tree for you.
 
 ## Your credentials
 

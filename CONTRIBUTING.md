@@ -109,6 +109,23 @@ Single-line messages, emoji prefix, no body:
 :white_check_mark: test cover recursive delete on object stores
 ```
 
+## Releasing
+
+The version lives in `apps/vscode/package.json`, and an odd minor (0.1.x,
+0.3.x) marks a pre-release. Do not use a semver suffix such as
+`0.2.0-beta.1`: the VS Code Marketplace rejects it.
+
+1. Open a PR that bumps the version and adds its entry to
+   `apps/vscode/CHANGELOG.md`. The READMEs carry no version numbers, so they
+   only change when features do.
+2. After it merges, push a matching tag: `git tag -s v0.1.1 && git push origin v0.1.1`.
+3. The **Release** workflow verifies and packages the extension, publishes it to
+   Open VSX, then creates a GitHub release with the `.vsix` attached.
+4. Upload that same `.vsix` to the VS Code Marketplace by hand.
+
+Running the Release workflow by hand from a branch is a dry run: it packages,
+checks that the Open VSX token can publish, and publishes nothing.
+
 ## Reporting bugs
 
 Please include the protocol and server software (AWS S3 vs MinIO vs R2 matters —
