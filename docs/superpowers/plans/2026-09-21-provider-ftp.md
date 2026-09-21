@@ -1087,7 +1087,9 @@ describe('parseMlstResponse', () => {
     expect(parseMlstResponse('')).toBeUndefined();
   });
 
-  it('returns undefined rather than a zero size when the size fact is nonsense', () => {
+  it('falls back to a zero size when the size fact is nonsense', () => {
+    // The entry is still usable — type and name are what a listing needs — so
+    // one bad fact does not cost the whole answer.
     expect(parseMlstResponse('250-x\n type=file;size=lots; /data/a\n250 End')?.size).toBe(0);
   });
 });
@@ -2812,22 +2814,22 @@ import { FTP_CAPABILITIES, FtpFileSystem } from './ftp-file-system.js';
 import type { FtpChannel } from './ftp-channel.js';
 import type { FtpEntry } from './ftp-helpers.js';
 
-export interface FakeChannel extends FtpChannel {
+interface FakeChannel extends FtpChannel {
   alive: boolean;
   readonly calls: string[];
 }
 
-export interface FakeChannelOptions {
+interface FakeChannelOptions {
   readonly hasMlst?: boolean;
   readonly mlst?: (path: string) => Promise<FtpEntry | undefined>;
   readonly list?: (path: string) => Promise<readonly FtpEntry[]>;
 }
 
-export function entry(name: string, overrides: Partial<FtpEntry> = {}): FtpEntry {
+function entry(name: string, overrides: Partial<FtpEntry> = {}): FtpEntry {
   return { name, type: 'file', size: 0, mtime: undefined, mode: undefined, ...overrides };
 }
 
-export function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
+function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
   const calls: string[] = [];
   const channel: FakeChannel = {
     alive: true,
@@ -2874,7 +2876,7 @@ export function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
   return channel;
 }
 
-export function context(settings: Readonly<Record<string, unknown>> = {}): ProviderContext {
+function context(settings: Readonly<Record<string, unknown>> = {}): ProviderContext {
   const config: ConnectionConfig = {
     id: 'test',
     providerId: 'ftp',
@@ -2884,7 +2886,7 @@ export function context(settings: Readonly<Record<string, unknown>> = {}): Provi
   return { config, getSecret: async () => ({ password: 'hunter2' }), logger: NOOP_LOGGER };
 }
 
-export async function connected(
+async function connected(
   channel: FtpChannel,
   settings: Readonly<Record<string, unknown>> = {},
 ): Promise<FtpFileSystem> {
@@ -3472,7 +3474,7 @@ In `packages/provider-ftp/src/ftp-file-system.test.ts`, replace the
 `FakeChannelOptions` interface with:
 
 ```ts
-export interface FakeChannelOptions {
+interface FakeChannelOptions {
   readonly hasMlst?: boolean;
   readonly mlst?: (path: string) => Promise<FtpEntry | undefined>;
   readonly list?: (path: string) => Promise<readonly FtpEntry[]>;
