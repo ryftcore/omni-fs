@@ -242,6 +242,41 @@ describe('FtpControlChannel requests', () => {
     );
   });
 
+  it('refuses a path that would inject a second command, rather than stripping it', async () => {
+    // FTP commands are CRLF-terminated and `basic-ftp` sends the string it is
+    // given, so `\r\n` in a path appends a command of the attacker's choosing
+    // to the control channel. `RemotePath` does not reject control characters,
+    // which makes this file the only place that can.
+    const client = fakeClient();
+    const channel = await open(client);
+
+    for (const nasty of ['/data/a\r\nDELE /etc/passwd', '/data/a\nSTOR x', '/data/a\0b']) {
+      await expect(channel.mkdir(nasty), nasty).rejects.toSatisfy(
+        (error: unknown) => OmniFsError.is(error) && error.code === 'ProtocolError',
+      );
+    }
+    expect(client.sent).toEqual([]);
+  });
+
+  it('guards every path that reaches the control channel, not just the two it builds', async () => {
+    // `basic-ftp` interpolates the path itself for DELE, RMD, RNFR/RNTO and
+    // LIST (`Client.js:330,342,515,693`), so checking only the MLST and MKD
+    // template literals would leave the same hole behind four other methods.
+    const channel = await open(fakeClient());
+    const nasty = '/data/a\r\nQUIT';
+    const isProtocolError = (error: unknown) =>
+      OmniFsError.is(error) && error.code === 'ProtocolError';
+
+    await expect(channel.mlst(nasty)).rejects.toSatisfy(isProtocolError);
+    await expect(channel.list(nasty)).rejects.toSatisfy(isProtocolError);
+    await expect(channel.rmdir(nasty)).rejects.toSatisfy(isProtocolError);
+    await expect(channel.unlink(nasty)).rejects.toSatisfy(isProtocolError);
+    await expect(channel.rename('/data/ok', nasty)).rejects.toSatisfy(isProtocolError);
+    await expect(channel.openReadStream(nasty)).rejects.toSatisfy(isProtocolError);
+    await expect(channel.upload(nasty, new Uint8Array())).rejects.toSatisfy(isProtocolError);
+    await expect(channel.openWriteStream(nasty)).rejects.toSatisfy(isProtocolError);
+  });
+
   it('refuses immediately on an already-aborted signal, without touching the client', async () => {
     const client = fakeClient();
     const channel = await open(client);
@@ -336,6 +371,57 @@ describe('FtpControlChannel transfers', () => {
     expect(channel.poisoned).toBe(true);
   });
 
+  it('spends the length budget across chunks, not per chunk', async () => {
+    // With `remaining` computed as `limit` rather than `limit - seen`, a
+    // transfer that arrives in small chunks over-delivers up to `limit` extra
+    // bytes for every chunk after the first. One chunk hides that entirely.
+    const client = fakeClient({
+      downloadTo: async (destination: Writable, _path: string, startAt = 0) => {
+        const body = '0123456789'.slice(startAt);
+        for (let at = 0; at < body.length; at += 2) {
+          destination.write(Buffer.from(body.slice(at, at + 2)));
+        }
+        destination.end();
+        return { code: 226, message: '226 done' };
+      },
+    });
+    const channel = await open(client);
+    const stream = await channel.openReadStream('/data/a.txt', { start: 0, length: 5 });
+    const bytes = await collectStream(stream);
+    expect(bytes.byteLength).toBe(5);
+    expect(new TextDecoder().decode(bytes)).toBe('01234');
+  });
+
+  it('holds the download back while the consumer is behind', async () => {
+    // Without back-pressure a slow reader on a large file buffers the whole
+    // transfer in memory, which is precisely the case a remote filesystem
+    // client exists for.
+    let secondAccepted = false;
+    const client = fakeClient({
+      downloadTo: async (destination: Writable) => {
+        destination.write(Buffer.alloc(64 * 1024));
+        await new Promise<void>((resolve) => {
+          destination.write(Buffer.alloc(64 * 1024), () => {
+            secondAccepted = true;
+            resolve();
+          });
+        });
+        destination.end();
+        return { code: 226, message: '226 done' };
+      },
+    });
+    const channel = await open(client);
+    const stream = await channel.openReadStream('/data/big.bin');
+
+    // Nobody has read a byte yet, so the second chunk must still be waiting.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(secondAccepted).toBe(false);
+
+    // Draining the consumer releases it, and nothing is lost on the way.
+    expect((await collectStream(stream)).byteLength).toBe(128 * 1024);
+    expect(secondAccepted).toBe(true);
+  });
+
   it('surfaces a failed download on the stream, not from the call that made it', async () => {
     const client = fakeClient({
       downloadTo: async () => {
@@ -394,8 +480,15 @@ describe('FtpControlChannel transfers', () => {
 
   it('fails a write stream close when the server rejects the transfer', async () => {
     const client = fakeClient({
+      // A 552 is the server's reply to a transfer it has *received*, so the
+      // fake takes the payload first and refuses at the end. (Refusing before
+      // reading anything is the other ordering, and it is covered on its own
+      // below — there the failure reaches the pending write instead, and the
+      // WritableStream is already errored by the time close() is called.)
       uploadFrom: async (source: Readable) => {
-        source.resume();
+        for await (const _chunk of source) {
+          /* drain */
+        }
         throw Object.assign(new Error('552 Quota exceeded'), { code: 552 });
       },
     });
@@ -407,6 +500,63 @@ describe('FtpControlChannel transfers', () => {
       (error: unknown) => OmniFsError.is(error) && error.code === 'QuotaExceeded',
     );
   });
+
+  // Both of the next two carry an explicit timeout: a regression here *hangs*
+  // rather than fails, and the suite must not sit on the default timeout to
+  // find that out.
+  it('rejects a pending write when the server fails mid-stream, instead of hanging', async () => {
+    // The 7-byte payload above fits inside the PassThrough's 16 KB
+    // high-water mark, so it never exercises this. Past that mark, once
+    // `basic-ftp` stops reading, the write callback is simply never called
+    // again — and `destroy()` does not settle an in-flight one. A caller
+    // that never reaches close() would wait forever on a transfer the
+    // server has already refused.
+    let fail: ((error: Error) => void) | undefined;
+    const client = fakeClient({
+      uploadFrom: () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        }),
+    });
+    const channel = await open(client);
+    const stream = await channel.openWriteStream('/data/big.bin');
+    const writer = stream.getWriter();
+
+    const pending = writer.write(new Uint8Array(64 * 1024));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    fail?.(Object.assign(new Error('552 Quota exceeded'), { code: 552 }));
+
+    await expect(pending).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'QuotaExceeded',
+    );
+  }, 2_000); // for the default timeout to notice. // A regression here hangs rather than fails, so the suite must not wait
+
+  it('rejects a pending write when the caller aborts mid-stream', async () => {
+    // Same hang, reached the other way: the stream's own abort() handler
+    // only runs when the *consumer* aborts, so a signal abort has to travel
+    // through `done` to the writer.
+    const controller = new AbortController();
+    const client = fakeClient({
+      uploadFrom: () =>
+        new Promise(() => {
+          /* never settles */
+        }),
+    });
+    const channel = await open(client);
+    const stream = await channel.openWriteStream('/data/big.bin', {
+      signal: controller.signal,
+    });
+    const writer = stream.getWriter();
+
+    const pending = writer.write(new Uint8Array(64 * 1024));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+
+    await expect(pending).rejects.toSatisfy(
+      (error: unknown) => OmniFsError.is(error) && error.code === 'Cancelled',
+    );
+    expect(channel.poisoned).toBe(true);
+  }, 2_000);
 });
 
 describe('FtpClientLike', () => {

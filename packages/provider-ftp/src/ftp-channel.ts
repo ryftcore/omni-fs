@@ -31,6 +31,36 @@ const POISONING_CODES: ReadonlySet<OmniFsErrorCode> = new Set([
   'ProtocolError',
 ]);
 
+/**
+ * Characters that would end a command early. FTP commands are CRLF-terminated
+ * and `basic-ftp` hands the string to the socket unchanged — `send` is
+ * `ftp.request(command)` with no sanitisation, and its own `remove`, `rename`,
+ * `list` and `removeEmptyDir` interpolate a path into `DELE`/`RNFR`/`LIST`/`RMD`
+ * the same way. `RemotePath` does not reject control characters, so a path
+ * carrying `\r\n` would inject a second command onto the control channel.
+ *
+ * This file is the only place that can defend it, so every path is checked here
+ * before it reaches the client — not only the two commands built with a
+ * template literal.
+ */
+const COMMAND_UNSAFE = /[\r\n\0]/;
+
+/**
+ * Refused rather than stripped. Silently rewriting the caller's path would
+ * turn an injection attempt into an operation on a *different* file, which is
+ * its own surprise and a worse one to debug.
+ */
+function assertCommandSafe(path: string): void {
+  if (COMMAND_UNSAFE.test(path)) {
+    throw new OmniFsError({
+      code: 'ProtocolError',
+      message: 'FTP path contains a carriage return, line feed or NUL byte.',
+      providerId: 'ftp',
+      path,
+    });
+  }
+}
+
 export interface FtpTransferOptions {
   readonly signal?: AbortSignal | undefined;
   readonly onProgress?: ((transferred: number) => void) | undefined;
@@ -234,11 +264,13 @@ export class FtpControlChannel implements FtpChannel {
   }
 
   async mlst(path: string, signal?: AbortSignal): Promise<FtpEntry | undefined> {
+    assertCommandSafe(path);
     const response = await this.#run(() => this.#client.send(`MLST ${path}`), path, signal);
     return parseMlstResponse(response.message);
   }
 
   async list(path: string, signal?: AbortSignal): Promise<readonly FtpEntry[]> {
+    assertCommandSafe(path);
     const infos = await this.#run(() => this.#client.list(path), path, signal);
     return infos
       .map(fromFileInfo)
@@ -246,18 +278,23 @@ export class FtpControlChannel implements FtpChannel {
   }
 
   async mkdir(path: string, signal?: AbortSignal): Promise<void> {
+    assertCommandSafe(path);
     await this.#run(() => this.#client.send(`MKD ${path}`), path, signal);
   }
 
   async rmdir(path: string, signal?: AbortSignal): Promise<void> {
+    assertCommandSafe(path);
     await this.#run(() => this.#client.removeEmptyDir(path), path, signal);
   }
 
   async unlink(path: string, signal?: AbortSignal): Promise<void> {
+    assertCommandSafe(path);
     await this.#run(() => this.#client.remove(path), path, signal);
   }
 
   async rename(from: string, to: string, signal?: AbortSignal): Promise<void> {
+    assertCommandSafe(from);
+    assertCommandSafe(to);
     await this.#run(() => this.#client.rename(from, to), from, signal);
   }
 
@@ -266,6 +303,7 @@ export class FtpControlChannel implements FtpChannel {
     range?: FtpReadRange,
     options?: FtpTransferOptions,
   ): Promise<ReadableStream<Uint8Array>> {
+    assertCommandSafe(path);
     throwIfAborted(options?.signal, path);
 
     const limit = range?.length;
@@ -286,10 +324,12 @@ export class FtpControlChannel implements FtpChannel {
           callback();
           return;
         }
+        // `limit - seen`, not `limit`: the budget is spent across every chunk
+        // of the transfer, not renewed for each one.
         const remaining = limit === undefined ? chunk.length : limit - seen;
         const slice = remaining >= chunk.length ? chunk : chunk.subarray(0, remaining);
         seen += slice.length;
-        pass.write(slice);
+        const ready = pass.write(slice);
         options?.onProgress?.(seen);
 
         if (limit !== undefined && seen >= limit) {
@@ -301,8 +341,28 @@ export class FtpControlChannel implements FtpChannel {
           // here anyway. Spec decision 6.
           finish();
           this.poison();
+          callback();
+          return;
         }
-        callback();
+
+        if (ready) {
+          callback();
+          return;
+        }
+
+        // Back-pressure. `pass.write` returning false means the consumer of the
+        // web stream is behind; holding this callback is what makes `basic-ftp`
+        // stop reading its data socket, and what stops a slow reader on a large
+        // file buffering the whole transfer in memory. `close` is listened for
+        // as well as `drain`, so a stream that ends or is destroyed while the
+        // download waits releases it rather than stalling the transfer forever.
+        const release = (): void => {
+          pass.off('drain', release);
+          pass.off('close', release);
+          callback();
+        };
+        pass.once('drain', release);
+        pass.once('close', release);
       },
     });
 
@@ -322,8 +382,13 @@ export class FtpControlChannel implements FtpChannel {
   }
 
   async upload(path: string, data: Uint8Array, options?: FtpTransferOptions): Promise<void> {
-    // `Readable.from(buffer)` iterates a Buffer *byte by byte*, so the array
-    // wrapper is load-bearing rather than stylistic.
+    assertCommandSafe(path);
+    // The `Buffer.from` is the load-bearing part, not the array around it.
+    // `Readable.from` special-cases Buffer and string and pushes the whole
+    // value as one chunk; a bare `Uint8Array` is just an iterable of numbers,
+    // so it would be yielded a byte at a time and the upload would arrive
+    // corrupted while still "succeeding". The array wrapper is belt and braces
+    // if the conversion is ever dropped.
     const source = Readable.from([Buffer.from(data.buffer, data.byteOffset, data.byteLength)]);
     await this.#run(() => this.#client.uploadFrom(source, path), path, options?.signal);
     options?.onProgress?.(data.byteLength);
@@ -333,28 +398,58 @@ export class FtpControlChannel implements FtpChannel {
     path: string,
     options?: FtpTransferOptions,
   ): Promise<WritableStream<Uint8Array>> {
+    assertCommandSafe(path);
     throwIfAborted(options?.signal, path);
 
     const pass = new PassThrough();
+    // Destroying the source below emits `error`, and an `error` event with no
+    // listener is an uncaught exception. The failure reaches the caller
+    // through the WritableStream instead, so this one is deliberately silent.
+    pass.on('error', () => undefined);
+
     const done = this.#run(() => this.#client.uploadFrom(pass, path), path, options?.signal);
-    // The rejection is awaited by close(); this keeps it from being an
-    // unhandled rejection in the window before that happens.
+
+    /**
+     * A transfer that fails part-way has to reach whoever is *writing*, not
+     * only whoever calls `close()`. `basic-ftp` stops reading the moment
+     * `uploadFrom` rejects, the PassThrough fills to its 16 KB high-water
+     * mark, and the pending `write()` callback is never called again — and
+     * `destroy()` does not settle an already in-flight write callback either,
+     * so tearing the stream down is not on its own enough. Every write
+     * therefore races this, and an aborted `signal` travels the same path
+     * because `#run` rejects `done`.
+     */
+    const failed = new Promise<never>((_resolve, reject) => {
+      done.catch((error: unknown) => {
+        const failure = toOmniFsError(error, path);
+        // Still destroy it: that releases the buffered chunks and tells the
+        // library its source is gone.
+        pass.destroy(failure);
+        reject(failure);
+      });
+    });
+    // `close()` awaits `done` and `write()` races `failed`; these keep neither
+    // from being an unhandled rejection in the window before that happens.
     done.catch(() => undefined);
+    failed.catch(() => undefined);
 
     let written = 0;
     return new WritableStream<Uint8Array>({
       write: (chunk) =>
-        new Promise<void>((resolve, reject) => {
-          pass.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength), (error) => {
-            if (error !== undefined && error !== null) {
-              reject(toOmniFsError(error, path));
-              return;
-            }
-            written += chunk.byteLength;
-            options?.onProgress?.(written);
-            resolve();
-          });
-        }),
+        Promise.race([
+          new Promise<void>((resolve, reject) => {
+            pass.write(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength), (error) => {
+              if (error !== undefined && error !== null) {
+                reject(toOmniFsError(error, path));
+                return;
+              }
+              written += chunk.byteLength;
+              options?.onProgress?.(written);
+              resolve();
+            });
+          }),
+          failed,
+        ]),
       close: async () => {
         pass.end();
         // The whole point: close() resolves when the *server* has accepted the
