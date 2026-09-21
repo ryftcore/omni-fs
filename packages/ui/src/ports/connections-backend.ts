@@ -52,6 +52,8 @@ export interface ConnectionSummary {
   readonly settings: Readonly<Record<string, unknown>>;
   readonly rootPath: string | undefined;
   readonly readOnly: boolean;
+  /** A preset id or `#rrggbb`; see `parseConnectionColor`. */
+  readonly color: string | undefined;
   /** Which secret keys hold a stored value. Never the values themselves. */
   readonly secretFieldsPresent: readonly string[];
   readonly state: ConnectionState;
@@ -65,11 +67,12 @@ export interface SaveConnectionInput {
   readonly settings: Readonly<Record<string, unknown>>;
   readonly rootPath: string | undefined;
   readonly readOnly: boolean;
+  readonly color: string | undefined;
   /** Only touched secret fields. Untouched ones keep their stored value. */
   readonly secretPatch: Readonly<Record<string, SecretPatchEntry>>;
 }
 
-export type TestConnectionInput = Omit<SaveConnectionInput, 'readOnly'>;
+export type TestConnectionInput = Omit<SaveConnectionInput, 'readOnly' | 'color'>;
 
 /** The serializable form of core's `ProbeResult`, converted at the boundary. */
 export interface ProbeOutcome {

@@ -31,7 +31,10 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
   readonly #configStore: ConfigStore;
   readonly #cache: EntryCache;
   readonly #logger: Logger;
-  readonly #wrapped = new WeakMap<RemoteFileSystem, ManagedFileSystem>();
+  readonly #wrapped = new WeakMap<
+    RemoteFileSystem,
+    { readonly readOnly: boolean; readonly fs: ManagedFileSystem }
+  >();
   readonly #emitter = new vscode.EventEmitter<vscode.FileChangeEvent[]>();
 
   readonly onDidChangeFile = this.#emitter.event;
@@ -205,38 +208,43 @@ export class OmniFileSystemProvider implements vscode.FileSystemProvider, vscode
       throw toVsCodeError(error, uri);
     });
 
-    // One ManagedFileSystem per live provider instance, so the cache and the
-    // emulation state survive across calls but are dropped when the underlying
-    // connection is replaced.
+    // The connection's own read-only flag. `#resolve` has only the id, so this
+    // is the one place the config can be reached — and without it the lock
+    // shown in the tree does nothing: ManagedFileSystem implements read-only
+    // properly and has to be told.
+    //
+    // Read on every call rather than once per connect, so Make Read-only
+    // applies to the very next write instead of waiting for a reconnect. It is
+    // a settings read, not a network call.
+    //
+    // Translated like `acquire` above. `VsCodeConfigStore` reads a setting
+    // and cannot fail, but `ConfigStore` is a core Port and the desktop
+    // host's will do real I/O — an untranslated throw from here reaches the
+    // editor as a raw Error rather than a FileSystemError.
+    const config = await this.#configStore.get(connectionId).catch((error: unknown) => {
+      throw toVsCodeError(error, uri);
+    });
+    const readOnly = config?.readOnly ?? false;
+
+    // One ManagedFileSystem per live provider instance and access mode, so the
+    // cache and the emulation state survive across calls but are dropped when
+    // the underlying connection is replaced or the flag flips.
     let managed = this.#wrapped.get(raw);
-    if (managed === undefined) {
-      // The connection's own read-only flag. `#resolve` has only the id, so
-      // this is the one place the config can be reached — and without it the
-      // lock shown in the tree does nothing: ManagedFileSystem implements
-      // read-only properly and was simply never told.
-      //
-      // Read when the wrapper is built, which is memoised per live provider
-      // instance, so a change to the flag takes effect on the next connect.
-      // That is how every other connection setting already behaves.
-      //
-      // Translated like `acquire` above. `VsCodeConfigStore` reads a setting
-      // and cannot fail, but `ConfigStore` is a core Port and the desktop
-      // host's will do real I/O — an untranslated throw from here reaches the
-      // editor as a raw Error rather than a FileSystemError.
-      const config = await this.#configStore.get(connectionId).catch((error: unknown) => {
-        throw toVsCodeError(error, uri);
-      });
-      managed = new ManagedFileSystem({
-        connectionId,
-        inner: raw,
-        cache: this.#cache,
-        logger: this.#logger.child(connectionId),
-        readOnly: config?.readOnly ?? false,
-      });
+    if (managed === undefined || managed.readOnly !== readOnly) {
+      managed = {
+        readOnly,
+        fs: new ManagedFileSystem({
+          connectionId,
+          inner: raw,
+          cache: this.#cache,
+          logger: this.#logger.child(connectionId),
+          readOnly,
+        }),
+      };
       this.#wrapped.set(raw, managed);
     }
 
-    return { fs: managed, path, connectionId };
+    return { fs: managed.fs, path, connectionId };
   }
 
   #fire(type: vscode.FileChangeType, uri: vscode.Uri): void {

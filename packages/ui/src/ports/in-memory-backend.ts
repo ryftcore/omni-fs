@@ -57,6 +57,7 @@ export class InMemoryConnectionsBackend implements ConnectionsBackend {
       settings: input.settings,
       rootPath: input.rootPath,
       readOnly: input.readOnly,
+      color: input.color,
       secretFieldsPresent: Object.keys(merged),
       state: { status: 'disconnected' },
     });

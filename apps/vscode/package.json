@@ -99,6 +99,18 @@
         "icon": "$(root-folder)"
       },
       {
+        "command": "omniFs.makeReadOnly",
+        "title": "Make Read-only",
+        "category": "Omni-FS",
+        "icon": "$(lock)"
+      },
+      {
+        "command": "omniFs.makeWritable",
+        "title": "Make Writable",
+        "category": "Omni-FS",
+        "icon": "$(unlock)"
+      },
+      {
         "command": "omniFs.refresh",
         "title": "Refresh",
         "category": "Omni-FS",
@@ -155,18 +167,28 @@
       "view/item/context": [
         {
           "command": "omniFs.connect",
-          "when": "view == omniFs.connections && viewItem == connection.disconnected",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\.disconnected\\./",
           "group": "inline@1"
         },
         {
           "command": "omniFs.disconnect",
-          "when": "view == omniFs.connections && viewItem == connection.connected",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\.connected\\./",
           "group": "inline@1"
         },
         {
           "command": "omniFs.mountAsWorkspaceFolder",
           "when": "view == omniFs.connections && viewItem =~ /^connection\\./",
           "group": "1_open@1"
+        },
+        {
+          "command": "omniFs.makeReadOnly",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\..*\\.writable$/",
+          "group": "5_access@1"
+        },
+        {
+          "command": "omniFs.makeWritable",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\..*\\.readOnly$/",
+          "group": "5_access@1"
         },
         {
           "command": "omniFs.editConnection",
@@ -235,7 +257,119 @@
           "description": "Verbosity of the Omni-FS output channel."
         }
       }
-    }
+    },
+    "colors": [
+      {
+        "id": "omniFs.connectionColor.red",
+        "description": "Tint for connections tagged Red: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#c62828",
+          "dark": "#f47067",
+          "highContrast": "#f47067",
+          "highContrastLight": "#c62828"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.orange",
+        "description": "Tint for connections tagged Orange: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#bc4c00",
+          "dark": "#f0883e",
+          "highContrast": "#f0883e",
+          "highContrastLight": "#bc4c00"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.yellow",
+        "description": "Tint for connections tagged Yellow: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#8a6d00",
+          "dark": "#e3b341",
+          "highContrast": "#e3b341",
+          "highContrastLight": "#8a6d00"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.green",
+        "description": "Tint for connections tagged Green: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#1a7f37",
+          "dark": "#57ab5a",
+          "highContrast": "#57ab5a",
+          "highContrastLight": "#1a7f37"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.teal",
+        "description": "Tint for connections tagged Teal: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#0f7b6c",
+          "dark": "#39c5bb",
+          "highContrast": "#39c5bb",
+          "highContrastLight": "#0f7b6c"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.blue",
+        "description": "Tint for connections tagged Blue: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#0969da",
+          "dark": "#539bf5",
+          "highContrast": "#539bf5",
+          "highContrastLight": "#0969da"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.indigo",
+        "description": "Tint for connections tagged Indigo: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#4f46e5",
+          "dark": "#8b8cf6",
+          "highContrast": "#8b8cf6",
+          "highContrastLight": "#4f46e5"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.purple",
+        "description": "Tint for connections tagged Purple: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#8250df",
+          "dark": "#b083f0",
+          "highContrast": "#b083f0",
+          "highContrastLight": "#8250df"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.pink",
+        "description": "Tint for connections tagged Pink: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#bf3989",
+          "dark": "#ec6cb9",
+          "highContrast": "#ec6cb9",
+          "highContrastLight": "#bf3989"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.brown",
+        "description": "Tint for connections tagged Brown: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#8b5a2b",
+          "dark": "#c69c6d",
+          "highContrast": "#c69c6d",
+          "highContrastLight": "#8b5a2b"
+        }
+      },
+      {
+        "id": "omniFs.connectionColor.gray",
+        "description": "Tint for connections tagged Gray: their tree entries, Explorer entries and editor tabs.",
+        "defaults": {
+          "light": "#57606a",
+          "dark": "#9aa4ae",
+          "highContrast": "#9aa4ae",
+          "highContrastLight": "#57606a"
+        }
+      }
+    ]
   },
   "scripts": {
     "build": "node esbuild.mjs",

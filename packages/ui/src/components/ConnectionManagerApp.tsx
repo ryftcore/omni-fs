@@ -67,6 +67,7 @@ export function ConnectionManagerApp(props: { readonly backend: ConnectionsBacke
             onSecretClear={(key) => dispatch({ type: 'secretCleared', key })}
             onRootPathChange={(value) => dispatch({ type: 'rootPathChanged', value })}
             onReadOnlyChange={(value) => dispatch({ type: 'readOnlyChanged', value })}
+            onColorChange={(value) => dispatch({ type: 'colorChanged', value })}
             onPickFile={(key) => void manager.pickFile(key)}
             onTest={() => void manager.test()}
             onRevert={() => dispatch({ type: 'reverted' })}
