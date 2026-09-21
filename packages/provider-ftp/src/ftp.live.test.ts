@@ -1,5 +1,5 @@
 import { beforeAll, describe, expect, it } from 'vitest';
-import { NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
+import { EntryCache, ManagedFileSystem, NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
 import type { ConnectionConfig, FileType, Logger, LogLevel, RemoteFileSystem } from '@omni-fs/core';
 import { runConformanceSuite } from '@omni-fs/testing';
 import { FtpControlChannel } from './ftp-channel.js';
@@ -358,6 +358,58 @@ describe('FTP live behaviour the shared suite cannot express', () => {
     }
   });
 
+  /**
+   * Nothing else in this repo runs `FtpFileSystem` inside `ManagedFileSystem`,
+   * which is the composition both hosts actually use — and that gap is exactly
+   * where the copy deadlock lived. The emulated copy (FTP has no server-side
+   * copy) used to open a read stream and then, with it still open, ask for a
+   * write stream. A read stream holds its pool channel for its whole life, so
+   * at the default `maxConnections: 1` the second acquire queued behind a
+   * stream that could only drain once the acquire was granted. No timeout, and
+   * VS Code's copy passes no signal, so the connection stayed wedged until
+   * dispose.
+   *
+   * The `stat` afterwards is the half that proves the fix rather than merely
+   * exercising it: a copy that returned the right bytes says nothing about
+   * whether the channel went back to the pool usable. Before the fix this call
+   * never returned either.
+   *
+   * The explicit timeout is so a regression fails in thirty seconds instead of
+   * hanging CI until the job's own limit.
+   */
+  it('copies through ManagedFileSystem on a one-channel pool and leaves the connection usable', async () => {
+    const inner = connect({ maxConnections: 1 });
+    await inner.connect();
+    // The premise. If this were ever not 1 the case below would prove nothing.
+    expect(inner.capabilities.maxConcurrency).toBe(1);
+
+    const managed = new ManagedFileSystem({
+      connectionId: 'live',
+      inner,
+      cache: new EntryCache(),
+      logger: NOOP_LOGGER,
+    });
+
+    const dir = RemotePath.parse(`/copy-${String(Date.now())}`);
+    try {
+      await managed.createDirectory(dir);
+      await managed.writeFile(dir.join('from.txt'), new TextEncoder().encode('copied'));
+
+      await managed.copy(dir.join('from.txt'), dir.join('to.txt'));
+      expect(new TextDecoder().decode(await managed.readFile(dir.join('to.txt')))).toBe('copied');
+
+      // A real round trip: `copy` invalidates its destination, so this cannot
+      // be served from the cache. It is the connection, not the copy, under
+      // test here.
+      expect((await managed.stat(dir.join('to.txt'))).size).toBe(6);
+    } finally {
+      await withTransport((channel) =>
+        removeTree(channel, `${ROOT_PREFIX}${dir.value}`, 'directory'),
+      );
+      await managed[Symbol.asyncDispose]();
+    }
+  }, 30_000);
+
   // Named for what it asserts. The brief called this "warns that a replacing
   // rename was not atomic", which is the opposite of the assertion below: on
   // vsftpd the atomic path is the one that runs, so the *absence* of the
@@ -422,6 +474,7 @@ describe('FTP cleanliness', () => {
       const names = (await collect(fs.list(RemotePath.ROOT))).map((entry) => entry.name);
       expect(names.filter((name) => name.startsWith('conformance-'))).toEqual([]);
       expect(names.filter((name) => name.startsWith('rename-'))).toEqual([]);
+      expect(names.filter((name) => name.startsWith('copy-'))).toEqual([]);
       expect(names.sort()).toEqual(['data', 'docs', 'readme.txt']);
     } finally {
       await fs[Symbol.asyncDispose]();

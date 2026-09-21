@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { EntryCache, ManagedFileSystem, NOOP_LOGGER, OmniFsError, RemotePath } from '@omni-fs/core';
-import type { DirEntry, ProviderCapabilities } from '@omni-fs/core';
+import type { DirEntry, ProviderCapabilities, ReadOptions, WriteOptions } from '@omni-fs/core';
 import { MemoryFileSystem } from './memory-file-system.js';
 
 /**
@@ -489,5 +489,119 @@ describe('ManagedFileSystem.createWriteStream', () => {
     // Bytes may have landed before it failed, so the old size is not safe to
     // keep serving. An errored stream never reaches the sink's `abort`.
     expect(cache.getStat(CONNECTION, p('/a/one.txt'))).toBeUndefined();
+  });
+});
+
+/**
+ * A provider whose connection carries one operation at a time, which is what
+ * `provider-ftp` is at its default `maxConnections: 1`: a read stream holds its
+ * pool channel for the whole life of the stream.
+ *
+ * It *throws* when asked for a write stream while a read stream it handed out
+ * is still open. The real thing does not throw — it queues the second acquire
+ * behind a stream that can only drain once the acquire is granted, and hangs
+ * forever with no timeout and nothing to cancel. Throwing is the only way a
+ * test can tell "took the buffered path" apart from "hung", which a hanging
+ * test cannot.
+ */
+class SingleChannelFileSystem extends MemoryFileSystem {
+  #openReads = 0;
+
+  override async createReadStream(
+    path: RemotePath,
+    options?: ReadOptions,
+  ): Promise<ReadableStream<Uint8Array>> {
+    const inner = await super.createReadStream(path, options);
+    const reader = inner.getReader();
+    this.#openReads += 1;
+
+    let released = false;
+    const release = (): void => {
+      if (released) return;
+      released = true;
+      this.#openReads -= 1;
+    };
+
+    return new ReadableStream<Uint8Array>({
+      pull: async (controller) => {
+        const { done, value } = await reader.read();
+        if (done) {
+          release();
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      },
+      cancel: async (reason) => {
+        release();
+        await reader.cancel(reason);
+      },
+    });
+  }
+
+  override async createWriteStream(
+    path: RemotePath,
+    options?: WriteOptions,
+  ): Promise<WritableStream<Uint8Array>> {
+    if (this.#openReads > 0) {
+      throw new Error('The single channel is still carrying a read stream.');
+    }
+    return super.createWriteStream(path, options);
+  }
+}
+
+/**
+ * The emulated copy is the one place in this class that would hold two streams
+ * open at once, so it is the one place `maxConcurrency` has to be consulted
+ * before choosing a strategy.
+ */
+describe('ManagedFileSystem.copy and the connection concurrency ceiling', () => {
+  function singleChannel(capabilities: Partial<ProviderCapabilities>): {
+    inner: SingleChannelFileSystem;
+    fs: ManagedFileSystem;
+  } {
+    const inner = new SingleChannelFileSystem({ capabilities });
+    const fs = new ManagedFileSystem({
+      connectionId: CONNECTION,
+      inner,
+      cache: new EntryCache(),
+      logger: NOOP_LOGGER,
+    });
+    return { inner, fs };
+  }
+
+  it('buffers instead of opening a write stream while the read stream is still open', async () => {
+    const { inner, fs } = singleChannel({ canCopyServerSide: false, maxConcurrency: 1 });
+    inner.seed({ '/a/one.txt': 'content' });
+    const sinkSpy = vi.spyOn(inner, 'createWriteStream');
+    const writeSpy = vi.spyOn(inner, 'writeFile');
+
+    await fs.copy(p('/a/one.txt'), p('/a/two.txt'));
+
+    expect(await read(fs, '/a/two.txt')).toBe('content');
+    // Not merely "it did not throw": the two spies name which branch ran. A
+    // pipe would have asked for the write stream, and nothing else in this
+    // class calls `writeFile` with a declared `contentLength`.
+    expect(sinkSpy).not.toHaveBeenCalled();
+    expect(writeSpy).toHaveBeenCalledWith(
+      p('/a/two.txt'),
+      expect.anything(),
+      expect.objectContaining({ contentLength: 7 }),
+    );
+  });
+
+  it('still pipes stream to stream once the connection can carry two operations', async () => {
+    // A plain `MemoryFileSystem`, because the double above refuses the overlap
+    // that this case exists to observe.
+    const { inner, fs } = harness({ canCopyServerSide: false, maxConcurrency: 2 });
+    inner.seed({ '/a/one.txt': 'content' });
+    const sinkSpy = vi.spyOn(inner, 'createWriteStream');
+
+    await fs.copy(p('/a/one.txt'), p('/a/two.txt'));
+
+    expect(await read(fs, '/a/two.txt')).toBe('content');
+    // The ceiling is a floor for streaming, not a switch to buffering for
+    // everyone: a provider that raises it gets the streaming path back.
+    expect(sinkSpy).toHaveBeenCalledTimes(1);
   });
 });
