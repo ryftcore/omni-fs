@@ -6,11 +6,8 @@
 # Everything here is throwaway: the credentials below are committed on purpose
 # and must never be used anywhere real. Nothing binds to a public interface.
 #
-# S3, WebDAV and SFTP are implemented, and `pnpm test:conformance` runs the
-# shared suite against all three of these servers. FTP is still a skeleton that
-# throws `Unsupported` from connect(); its server is here to exercise the
-# connection form now, and to be the target the suite runs against once that
-# provider is written.
+# S3, WebDAV, SFTP and FTP are all implemented, and `pnpm test:conformance`
+# runs the shared suite against these servers.
 
 name: omni-fs-dev
 
@@ -66,20 +63,21 @@ services:
     volumes:
       - sftp-data:/data
 
-  # --- FTP ------------------------------------------------------------------
-  # Passive mode needs its data ports published too, or listings hang.
+  # --- FTP / FTPS ------------------------------------------------------------
+  # Three listeners, all serving the same /data volume as the same user:
+  #   2121 -> 21    plain FTP and explicit AUTH TLS
+  #   2990 -> 990   implicit TLS on connect
+  #   2100 -> 2100  TLS 1.0 only, the legacy server tlsMinVersion exists for
+  # Passive mode needs the data ports published too, or listings hang.
   ftp:
-    image: delfer/alpine-ftp-server:latest
-    environment:
-      USERS: 'omnifs|omnifs-dev-secret|/ftp/omnifs|1001'
-      ADDRESS: localhost
-      MIN_PORT: 21000
-      MAX_PORT: 21010
+    build: ./docker/ftp
     ports:
       - '127.0.0.1:2121:21'
-      - '127.0.0.1:21000-21010:21000-21010'
+      - '127.0.0.1:2990:990'
+      - '127.0.0.1:2100:2100'
+      - '127.0.0.1:21000-21032:21000-21032'
     volumes:
-      - ftp-data:/ftp/omnifs
+      - ftp-data:/data
 
   # --- WebDAV ---------------------------------------------------------------
   webdav:
