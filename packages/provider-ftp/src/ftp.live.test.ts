@@ -258,6 +258,28 @@ describe('FTP live behaviour the shared suite cannot express', () => {
     await fs[Symbol.asyncDispose]();
   });
 
+  it('traces the control channel without ever writing the password', async () => {
+    // The protocol log is the one place a credential could leak into a file
+    // the user attaches to a bug report. `basic-ftp` masks `PASS`; this holds
+    // it to that against a real login, and proves the trace is wired at all.
+    const lines: string[] = [];
+    const logger: Logger = {
+      log: (_level, message, data) => {
+        lines.push(`${message} ${JSON.stringify(data ?? {})}`);
+      },
+      child: () => logger,
+    };
+    const fs = connect({ port: LEGACY_PORT, tlsMinVersion: 'TLSv1' }, logger);
+    await fs.connect();
+    for await (const _entry of fs.list(RemotePath.ROOT)) void _entry;
+    await fs[Symbol.asyncDispose]();
+
+    expect(lines.some((line) => line.startsWith('> PASS'))).toBe(true);
+    expect(lines.some((line) => line.startsWith('> LIST') || line.startsWith('> MLSD'))).toBe(true);
+    expect(lines.find((line) => line.includes(PASSWORD))).toBeUndefined();
+    expect(lines.find((line) => line.startsWith('FTP connected'))).toMatch(/"tls":"TLSv1"/);
+  });
+
   // The other direction, which is the one that proves the setting is wired to
   // the socket at all. A knob only ever tested where it succeeds has not been
   // tested.

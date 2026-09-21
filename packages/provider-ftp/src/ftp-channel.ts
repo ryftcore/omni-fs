@@ -17,7 +17,7 @@ const CONTROL_TIMEOUT_MS = 30_000;
  * without this would be a setting the user configures correctly and which still
  * fails. See spec decision 8.
  */
-const LEGACY_CIPHERS = 'DEFAULT@SECLEVEL=0';
+export const LEGACY_CIPHERS = 'DEFAULT@SECLEVEL=0';
 const RELAXED_VERSIONS: readonly FtpTlsMinVersion[] = ['TLSv1', 'TLSv1.1'];
 
 /**
@@ -77,6 +77,8 @@ export interface FtpTransferOptions {
 export interface FtpChannel {
   /** Whether the server advertised `MLST` in `FEAT`. Decides how `stat` works. */
   readonly hasMlst: boolean;
+  /** What the login negotiated, for the log. Never consulted for behaviour. */
+  readonly session: FtpSessionInfo;
   /** Set when the control channel was abandoned mid-command. Never unset. */
   readonly poisoned: boolean;
   isAlive(): boolean;
@@ -100,6 +102,25 @@ export interface FtpChannel {
   openWriteStream(path: string, options?: FtpTransferOptions): Promise<WritableStream<Uint8Array>>;
 }
 
+export interface FtpSessionInfo {
+  /** The first line of the server's 220 greeting, e.g. `220 Microsoft FTP Service`. */
+  readonly greeting: string | undefined;
+  /** e.g. `TLSv1.3`. Undefined for a plain control channel. */
+  readonly tlsProtocol: string | undefined;
+  /** OpenSSL's cipher name, e.g. `ECDHE-RSA-AES256-SHA`. */
+  readonly tlsCipher: string | undefined;
+}
+
+/**
+ * `basic-ftp`'s `FtpContext`: the control socket, and the one function every
+ * line of the library's own protocol log goes through. `log` is written, not
+ * called — replacing it is how that log reaches ours instead of `console`.
+ */
+export interface FtpContextLike {
+  readonly socket: unknown;
+  log: (message: string) => void;
+}
+
 /**
  * The part of `basic-ftp`'s `Client` this package uses, declared structurally
  * so the hermetic tests can supply one without a socket. `Client` satisfies it
@@ -107,8 +128,10 @@ export interface FtpChannel {
  */
 export interface FtpClientLike {
   readonly closed: boolean;
+  /** Optional so a test fake without a socket still satisfies the interface. */
+  readonly ftp?: FtpContextLike;
   close(): void;
-  access(options: AccessOptionsLike): Promise<unknown>;
+  access(options: AccessOptionsLike): Promise<{ readonly message: string }>;
   features(): Promise<Map<string, string>>;
   pwd(): Promise<string>;
   send(command: string): Promise<{ readonly code: number; readonly message: string }>;
@@ -218,14 +241,21 @@ export function relaxesCipherPolicy(version: FtpTlsMinVersion): boolean {
 
 export class FtpControlChannel implements FtpChannel {
   readonly hasMlst: boolean;
+  readonly session: FtpSessionInfo;
 
   readonly #client: FtpClientLike;
   readonly #logger: Logger;
   #poisoned = false;
 
-  private constructor(client: FtpClientLike, hasMlst: boolean, logger: Logger) {
+  private constructor(
+    client: FtpClientLike,
+    hasMlst: boolean,
+    session: FtpSessionInfo,
+    logger: Logger,
+  ) {
     this.#client = client;
     this.hasMlst = hasMlst;
+    this.session = session;
     this.#logger = logger;
   }
 
@@ -244,21 +274,24 @@ export class FtpControlChannel implements FtpChannel {
     }
 
     const client = (options.createClient ?? (() => new Client(CONTROL_TIMEOUT_MS)))();
+    routeProtocolLog(client, logger);
     try {
-      await withCancellation(client.access(buildAccessOptions(settings, password)), signal, target);
+      const welcome = await withCancellation(
+        client.access(buildAccessOptions(settings, password)),
+        signal,
+        target,
+      );
       // `basic-ftp` reads FEAT during access for its own MLSD decision but does
       // not expose the map, so it is asked for once more here and cached for
       // the life of the channel. One extra round trip at login, never again.
       const features = await client.features();
 
-      if (relaxesCipherPolicy(settings.tlsMinVersion)) {
-        logger.log('warn', 'FTP TLS cipher policy relaxed for a legacy server', {
-          host: settings.host,
-          tlsMinVersion: settings.tlsMinVersion,
-        });
-      }
-
-      return new FtpControlChannel(client, features.has('MLST'), logger);
+      const session = describeSession(client, welcome.message);
+      logger.log('debug', 'FTP channel opened', {
+        tls: session.tlsProtocol ?? 'none',
+        mlst: features.has('MLST'),
+      });
+      return new FtpControlChannel(client, features.has('MLST'), session, logger);
     } catch (error) {
       client.close();
       throw toOmniFsError(error, target);
@@ -522,4 +555,37 @@ export class FtpControlChannel implements FtpChannel {
       throw translated;
     }
   }
+}
+
+/**
+ * `basic-ftp` writes every command it sends (`> LIST /data`, with `PASS`
+ * already masked by `FtpContext.send`), every reply it reads, and its TLS
+ * decisions through `FtpContext.log` — to `console`, and only when `verbose`
+ * is set. Pointing it at our logger at `trace` gives the equivalent of
+ * FileZilla's message log, and the level filter decides whether anyone sees it.
+ */
+function routeProtocolLog(client: FtpClientLike, logger: Logger): void {
+  if (client.ftp === undefined) return;
+  client.ftp.log = (message) => {
+    logger.log('trace', message.trimEnd());
+  };
+}
+
+function describeSession(client: FtpClientLike, greeting: string): FtpSessionInfo {
+  const socket = client.ftp?.socket as Partial<TlsSocketLike> | undefined;
+  const protocol =
+    typeof socket?.getProtocol === 'function' ? (socket.getProtocol() ?? undefined) : undefined;
+  const cipher =
+    typeof socket?.getCipher === 'function' ? (socket.getCipher()?.name ?? undefined) : undefined;
+  return {
+    greeting: greeting.split(/\r?\n/)[0]?.trim() || undefined,
+    tlsProtocol: protocol,
+    tlsCipher: cipher,
+  };
+}
+
+/** The two `TLSSocket` methods read above; a plain `Socket` has neither. */
+interface TlsSocketLike {
+  getProtocol(): string | null;
+  getCipher(): { readonly name: string } | undefined;
 }

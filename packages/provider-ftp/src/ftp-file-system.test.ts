@@ -3,7 +3,7 @@ import { NOOP_LOGGER, OmniFsError, RemotePath, collectStream } from '@omni-fs/co
 import type { ConnectionConfig, Logger, LogLevel, ProviderContext } from '@omni-fs/core';
 import { toOmniFsError } from './errors.js';
 import { FTP_CAPABILITIES, FtpFileSystem } from './ftp-file-system.js';
-import type { FtpChannel } from './ftp-channel.js';
+import type { FtpChannel, FtpSessionInfo } from './ftp-channel.js';
 import type { FtpEntry } from './ftp-helpers.js';
 
 interface FakeChannel extends FtpChannel {
@@ -13,6 +13,7 @@ interface FakeChannel extends FtpChannel {
 
 interface FakeChannelOptions {
   readonly hasMlst?: boolean;
+  readonly session?: FtpSessionInfo;
   readonly mlst?: (path: string) => Promise<FtpEntry | undefined>;
   readonly list?: (path: string) => Promise<readonly FtpEntry[]>;
   /** Served by `openReadStream`, honouring `start` and `length`. */
@@ -47,6 +48,11 @@ function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
     alive: true,
     calls,
     hasMlst: options.hasMlst ?? true,
+    session: options.session ?? {
+      greeting: undefined,
+      tlsProtocol: undefined,
+      tlsCipher: undefined,
+    },
     poisoned: false,
     isAlive: () => channel.alive,
     poison: () => {
@@ -129,14 +135,34 @@ function fakeChannel(options: FakeChannelOptions = {}): FakeChannel {
   return channel;
 }
 
-function context(settings: Readonly<Record<string, unknown>> = {}): ProviderContext {
+function context(
+  settings: Readonly<Record<string, unknown>> = {},
+  logger: Logger = NOOP_LOGGER,
+): ProviderContext {
   const config: ConnectionConfig = {
     id: 'test',
     providerId: 'ftp',
     label: 'test',
     settings: { host: 'ftp.example.com', username: 'alice', ...settings },
   };
-  return { config, getSecret: async () => ({ password: 'hunter2' }), logger: NOOP_LOGGER };
+  return { config, getSecret: async () => ({ password: 'hunter2' }), logger };
+}
+
+interface LogEntry {
+  readonly level: LogLevel;
+  readonly message: string;
+  readonly data: Record<string, unknown> | undefined;
+}
+
+function recordingLogger(): { logger: Logger; entries: LogEntry[] } {
+  const entries: LogEntry[] = [];
+  const logger: Logger = {
+    log: (level, message, data) => {
+      entries.push({ level, message, data });
+    },
+    child: () => logger,
+  };
+  return { logger, entries };
 }
 
 async function connected(
@@ -194,6 +220,63 @@ describe('capabilities', () => {
 });
 
 describe('connect', () => {
+  it('says what it connected to: greeting, TLS version and cipher, and MLST', async () => {
+    // The line FileZilla users look for first when a server misbehaves. An
+    // old server's "TLS 1.0, SHA-1" is visible here without a packet capture.
+    const { logger, entries } = recordingLogger();
+    const channel = fakeChannel({
+      hasMlst: false,
+      session: {
+        greeting: '220 Microsoft FTP Service',
+        tlsProtocol: 'TLSv1',
+        tlsCipher: 'ECDHE-RSA-AES256-SHA',
+      },
+    });
+    const fs = new FtpFileSystem(context({}, logger), async () => channel);
+
+    await fs.connect();
+
+    expect(entries.find((entry) => entry.message === 'FTP connected')).toMatchObject({
+      level: 'info',
+      data: {
+        greeting: '220 Microsoft FTP Service',
+        tls: 'TLSv1',
+        cipher: 'ECDHE-RSA-AES256-SHA',
+        mlst: false,
+      },
+    });
+  });
+
+  it('warns about weakened TLS once per connection, not once per channel', async () => {
+    // Weakened crypto is never silent, even when another setting implies it —
+    // but a pool of four logins is still one decision the user made once.
+    const { logger, entries } = recordingLogger();
+    const fs = new FtpFileSystem(
+      context({ tlsMinVersion: 'TLSv1', maxConnections: 2 }, logger),
+      async () => fakeChannel(),
+    );
+
+    await fs.connect();
+    await Promise.all([
+      fs.list(RemotePath.ROOT)[Symbol.asyncIterator]().next(),
+      fs.list(RemotePath.ROOT)[Symbol.asyncIterator]().next(),
+    ]);
+
+    const warnings = entries.filter(
+      (entry) => entry.level === 'warn' && /TLS weakened/.test(entry.message),
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('does not warn about TLS when the floor is left alone', async () => {
+    const { logger, entries } = recordingLogger();
+    const fs = new FtpFileSystem(context({}, logger), async () => fakeChannel());
+
+    await fs.connect();
+
+    expect(entries.some((entry) => entry.level === 'warn')).toBe(false);
+  });
+
   it('resolves the login directory once', async () => {
     const channel = fakeChannel();
     const fs = await connected(channel);

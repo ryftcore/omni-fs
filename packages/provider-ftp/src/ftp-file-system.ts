@@ -12,7 +12,12 @@ import type {
   WriteOptions,
 } from '@omni-fs/core';
 import { isReplyCode, toOmniFsError } from './errors.js';
-import { FtpControlChannel } from './ftp-channel.js';
+import {
+  FtpControlChannel,
+  LEGACY_CIPHERS,
+  hasSecurityLevels,
+  relaxesCipherPolicy,
+} from './ftp-channel.js';
 import type { FtpChannel, FtpTransferOptions, OpenChannel } from './ftp-channel.js';
 import {
   buildRange,
@@ -121,11 +126,12 @@ export class FtpFileSystem implements RemoteFileSystem {
       },
     });
 
+    let first: FtpChannel | undefined;
     try {
-      this.#base = await pool.lease(
-        async (channel) => resolveBase(this.#settings.rootPrefix, await channel.pwd(signal)),
-        signal,
-      );
+      this.#base = await pool.lease(async (channel) => {
+        first = channel;
+        return resolveBase(this.#settings.rootPrefix, await channel.pwd(signal));
+      }, signal);
     } catch (error) {
       await pool.close();
       throw toOmniFsError(error, this.#settings.rootPrefix);
@@ -137,7 +143,22 @@ export class FtpFileSystem implements RemoteFileSystem {
       base: this.#base,
       secure: this.#settings.secure,
       maxConnections: this.#settings.maxConnections,
+      greeting: first?.session.greeting,
+      tls: first?.session.tlsProtocol,
+      cipher: first?.session.tlsCipher,
+      mlst: first?.hasMlst,
     });
+    // Once per connection rather than once per login: a pool of four channels
+    // is still one decision the user made once.
+    if (this.#settings.secure !== 'none' && relaxesCipherPolicy(this.#settings.tlsMinVersion)) {
+      // Says which half applied: under BoringSSL (VS Code) only the version
+      // floor moves, because there are no security levels to lower.
+      this.#logger.log('warn', 'FTP TLS weakened for a legacy server', {
+        host: this.#settings.host,
+        tlsMinVersion: this.#settings.tlsMinVersion,
+        ciphers: hasSecurityLevels() ? LEGACY_CIPHERS : 'library default',
+      });
+    }
   }
 
   isAlive(): boolean {

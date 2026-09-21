@@ -3,7 +3,7 @@ import type { Readable, Writable } from 'node:stream';
 import { NOOP_LOGGER, OmniFsError, collectStream } from '@omni-fs/core';
 import type { Logger, LogLevel } from '@omni-fs/core';
 import { FtpControlChannel, buildAccessOptions, hasSecurityLevels } from './ftp-channel.js';
-import type { FtpClientLike } from './ftp-channel.js';
+import type { FtpClientLike, FtpContextLike } from './ftp-channel.js';
 import { readSettings } from './settings.js';
 
 const settings = readSettings({ host: 'ftp.example.com', username: 'alice' });
@@ -190,22 +190,57 @@ describe('FtpControlChannel.open', () => {
     expect(client.close).toHaveBeenCalled();
   });
 
-  it('warns out loud when the cipher policy was relaxed', async () => {
-    // Weakened crypto is never silent, even when it is implied by another
-    // setting. Same rule as allowSelfSigned.
-    const { logger, entries } = capturingLogger();
-    await open(fakeClient(), { tlsMinVersion: 'TLSv1' }, logger);
-    expect(entries.some((entry) => entry.level === 'warn' && /cipher/i.test(entry.message))).toBe(
-      true,
-    );
+  it('keeps the greeting and what TLS actually negotiated', async () => {
+    const client = fakeClient({
+      access: vi.fn(async () => ({ code: 220, message: '220 Microsoft FTP Service' })),
+    });
+    client.ftp = fakeContext({
+      getProtocol: () => 'TLSv1',
+      getCipher: () => ({ name: 'ECDHE-RSA-AES256-SHA', standardName: '', version: 'TLSv1' }),
+    });
+
+    const channel = await open(client);
+
+    expect(channel.session).toEqual({
+      greeting: '220 Microsoft FTP Service',
+      tlsProtocol: 'TLSv1',
+      tlsCipher: 'ECDHE-RSA-AES256-SHA',
+    });
   });
 
-  it('does not warn when the TLS floor is left alone', async () => {
+  it('reports no TLS for a plain control channel', async () => {
+    const client = fakeClient();
+    client.ftp = fakeContext({});
+
+    const channel = await open(client, { secure: 'none' });
+
+    expect(channel.session.tlsProtocol).toBeUndefined();
+    expect(channel.session.tlsCipher).toBeUndefined();
+  });
+
+  it('sends the raw control channel to the log at trace', async () => {
+    // The equivalent of FileZilla's message log. `basic-ftp` already writes
+    // `> PASS ###` rather than the password (FtpContext.send), and the live
+    // suite checks that end to end.
     const { logger, entries } = capturingLogger();
-    await open(fakeClient(), {}, logger);
-    expect(entries.some((entry) => entry.level === 'warn')).toBe(false);
+    const client = fakeClient();
+    const context = fakeContext({});
+    client.ftp = context;
+
+    await open(client, {}, logger);
+    context.log('> LIST /data\r\n');
+
+    expect(entries).toContainEqual({ level: 'trace', message: '> LIST /data' });
   });
 });
+
+/** `basic-ftp`'s `FtpContext`, as far as the channel reads it. */
+function fakeContext(socket: Record<string, unknown>): FtpContextLike {
+  return {
+    socket,
+    log: () => undefined,
+  };
+}
 
 describe('FtpControlChannel requests', () => {
   it('asks the server where it landed', async () => {
