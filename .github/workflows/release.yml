@@ -1,25 +1,38 @@
 name: Release
 
+# Pushing a `v<version>` tag is the whole release: verify, package, publish to
+# the VS Code Marketplace, then attach the same .vsix to a GitHub release.
+#
+# Running it by hand from a branch is a dry run — everything up to the packaged
+# .vsix, uploaded as an artifact, and nothing published. Running it by hand
+# from an existing tag repeats that tag's release, which is how a failed
+# publish is retried.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
-    inputs:
-      publish_marketplace:
-        description: 'Also publish to the VS Code Marketplace'
-        type: boolean
-        default: false
+
+# Two releases of one tag must never race each other to the Marketplace.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
 
-jobs:
-  release:
-    name: build and release
-    runs-on: ubuntu-latest
+env:
+  TURBO_TELEMETRY_DISABLED: 1
+  DO_NOT_TRACK: 1
 
-    permissions:
-      contents: write # create the GitHub release and upload the .vsix
+jobs:
+  build:
+    name: verify and package
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    outputs:
+      version: ${{ steps.channel.outputs.version }}
+      prerelease: ${{ steps.channel.outputs.prerelease }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,19 +48,34 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      # A tag that disagrees with the manifest produces a .vsix whose version
-      # does not match the release it is attached to. Catch it before building.
-      - name: Tag matches extension version
-        if: startsWith(github.ref, 'refs/tags/v')
+      # The Marketplace refuses semver pre-release versions (`0.1.0-beta.1`)
+      # outright; a pre-release there is a plain `major.minor.patch` published
+      # with a flag. So the channel follows VS Code's own recommendation: an
+      # odd minor is a pre-release, an even minor is stable. Pre-release users
+      # are moved to a stable build once its version is higher, so 0.1.x
+      # pre-releases hand over to 0.2.0 without anyone reinstalling.
+      #
+      # A tag that disagrees with the manifest would publish a .vsix whose
+      # version does not match the release it is attached to, so that is
+      # checked here too, before anything is built.
+      - name: Resolve version and channel
+        id: channel
         run: |
           set -euo pipefail
-          tag="${GITHUB_REF_NAME#v}"
-          manifest=$(node -p "require('./apps/vscode/package.json').version")
-          echo "tag=$tag manifest=$manifest"
-          if [ "$tag" != "$manifest" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match apps/vscode/package.json version $manifest."
+          version=$(node -p "require('./apps/vscode/package.json').version")
+          if ! [[ "$version" =~ ^[0-9]+\.([0-9]+)\.[0-9]+$ ]]; then
+            echo "::error::apps/vscode/package.json version '$version' must be plain major.minor.patch — the Marketplace rejects pre-release suffixes. Use an odd minor for a pre-release."
             exit 1
           fi
+          minor="${BASH_REMATCH[1]}"
+          if [[ "$GITHUB_REF" == refs/tags/* && "$GITHUB_REF_NAME" != "v$version" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match apps/vscode/package.json version $version."
+            exit 1
+          fi
+          prerelease=$([ $((minor % 2)) -eq 1 ] && echo true || echo false)
+          echo "version $version, pre-release $prerelease"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$prerelease" >> "$GITHUB_OUTPUT"
 
       # Never ship a release that would not have passed CI.
       - run: pnpm build
@@ -55,36 +83,114 @@ jobs:
       - run: pnpm lint
       - run: pnpm test
 
+      # `package:vsix` with the pre-release flag passed through turbo to the
+      # trailing `vsce package`. The flag has to be set here, not only at
+      # publish: it is written into the .vsix manifest, and `vsce publish
+      # --pre-release` refuses a package that lacks it.
       - name: Package extension
-        run: pnpm package:vsix
+        env:
+          PRERELEASE: ${{ steps.channel.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if [ "$PRERELEASE" = true ]; then
+            pnpm exec turbo run package --filter=omni-fs-vscode -- --pre-release
+          else
+            pnpm package:vsix
+          fi
 
-      - name: Create GitHub release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Check the bundle stayed lean
+        run: |
+          VSIX=$(ls apps/vscode/*.vsix)
+          SIZE=$(( $(wc -c < "$VSIX") / 1024 ))
+          echo "$VSIX is ${SIZE} KB"
+          if [ "$SIZE" -gt 2048 ]; then
+            echo "::error::VSIX grew past 2 MB (${SIZE} KB). Check apps/vscode/.vscodeignore."
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          files: apps/vscode/*.vsix
-          generate_release_notes: true
-          draft: true # review before it goes out
-          fail_on_unmatched_files: true
-          # A tag carrying a semver pre-release suffix (v0.1.0-beta.1) is
-          # marked as a pre-release, so GitHub does not advertise it as the
-          # latest stable download.
-          prerelease: ${{ contains(github.ref_name, '-') }}
+          name: omni-fs-vsix
+          path: apps/vscode/*.vsix
+          if-no-files-found: error
+          retention-days: 30
 
-      # Marketplace publishing is opt-in, so the workflow stays useful for
-      # producing a release artifact long before anyone is ready to publish.
+  marketplace:
+    name: publish to VS Code Marketplace
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # The token is an environment secret, not a repository one, so only this
+    # job can read it — and required reviewers on the environment, if set in
+    # the repository settings, become the approval gate before a publish.
+    environment:
+      name: marketplace
+      url: https://marketplace.visualstudio.com/items?itemName=ryftcore.omni-fs-vscode
+
+    steps:
+      # Checked out only for the lockfile, so vsce is the pinned version rather
+      # than whatever `npx` resolves today.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile --filter omni-fs-vscode
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omni-fs-vsix
+          path: dist-vsix
+
+      # Publishes the exact .vsix the build job verified, never a repackage.
+      # --skip-duplicate makes a retry after a later failure — the GitHub
+      # release, say — succeed instead of stopping on "version exists".
       #
-      # The PAT check lives in the script, not in `if:`. The `secrets` context
-      # is not available to step conditions, so guarding there would silently
-      # evaluate to false and skip the publish without explanation.
-      - name: Publish to VS Code Marketplace
-        if: ${{ inputs.publish_marketplace }}
+      # The token check lives in the script: the `secrets` context is not
+      # available to `if:`, so a guard there would silently skip the publish.
+      - name: Publish
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
+          PRERELEASE: ${{ needs.build.outputs.prerelease }}
         run: |
           set -euo pipefail
           if [ -z "${VSCE_PAT:-}" ]; then
-            echo "::error::publish_marketplace was requested but the VSCE_PAT repository secret is not set."
+            echo "::error::The VSCE_PAT secret is not set on the 'marketplace' environment."
             exit 1
           fi
-          pnpm --filter omni-fs-vscode exec vsce publish --no-dependencies --pat "$VSCE_PAT"
+          VSIX=$(ls "$PWD"/dist-vsix/*.vsix)
+          flags=(--packagePath "$VSIX" --skip-duplicate)
+          if [ "$PRERELEASE" = true ]; then flags+=(--pre-release); fi
+          pnpm --filter omni-fs-vscode exec vsce publish "${flags[@]}"
+
+  github-release:
+    name: GitHub release
+    needs: [build, marketplace]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    permissions:
+      contents: write # create the release and upload the .vsix
+
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: omni-fs-vsix
+          path: dist-vsix
+
+      # After the Marketplace, so a release page never offers a version the
+      # Marketplace does not have.
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          files: dist-vsix/*.vsix
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          prerelease: ${{ needs.build.outputs.prerelease == 'true' }}
