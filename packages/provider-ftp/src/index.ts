@@ -21,6 +21,3 @@ export const ftpProvider: ProviderDefinition = {
 export { FTP_CAPABILITIES, FtpFileSystem } from './ftp-file-system.js';
 export { FTP_SECRET_SCHEMA, FTP_SETTINGS_SCHEMA, readSettings } from './settings.js';
 export type { FtpSecureMode, FtpSettings, FtpTlsMinVersion } from './settings.js';
-export { FtpControlChannel } from './ftp-channel.js';
-export type { FtpChannel, FtpChannelOptions, OpenChannel } from './ftp-channel.js';
-export { FtpPool } from './ftp-pool.js';

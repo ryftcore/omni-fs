@@ -123,10 +123,15 @@ So `capabilities` becomes a getter, exactly as `provider-sftp` did for
   down when a `421` shrinks it.
 
 This is the second provider whose capabilities depend on the connection, and
-the first whose capabilities depend on a _setting_. `ManagedFileSystem` and
-`TransferQueue` both read capabilities at call time, so no core change is
-needed — but the skeleton's comment, "One control channel. Do not raise this.",
-is now wrong and is replaced by one explaining what the number means.
+the first whose capabilities depend on a _setting_. `ManagedFileSystem` reads
+capabilities at call time, but `TransferQueue` does not: its only caller,
+`apps/vscode`'s connect path, calls `setConnectionLimit` once, at connect, so
+a ceiling that falls mid-session (a `421` shrinking the pool) is not observed
+until the next connect. That is a real gap, not a design this plan closes —
+teaching the queue to track a live ceiling is core plus host work outside its
+scope, left as future work. The skeleton's comment, "One control channel. Do
+not raise this.", is now wrong regardless, and is replaced by one explaining
+what the number means and that gap.
 
 ### 4. `canDeleteRecursive` is `true` — the skeleton says `false`
 

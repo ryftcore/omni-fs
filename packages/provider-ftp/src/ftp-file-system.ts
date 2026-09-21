@@ -86,9 +86,10 @@ export class FtpFileSystem implements RemoteFileSystem {
    * Static until the settings are read, then truthful about this connection.
    *
    * This is the first provider whose capabilities depend on a *setting* rather
-   * than on the server. `TransferQueue` reads `maxConcurrency` at call time, so
-   * a pool that shrank after a `421` stops the queue asking for more transfers
-   * than the server will hold, without core changing.
+   * than on the server. `TransferQueue` reads `maxConcurrency` once, at
+   * connect, not on every dispatch — so a pool that shrinks after a `421`
+   * mid-session is not yet observed by the queue. See the comment on
+   * `ProviderCapabilities.maxConcurrency` for the consequence.
    */
   get capabilities(): ProviderCapabilities {
     return {

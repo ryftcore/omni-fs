@@ -52,9 +52,15 @@ export interface ProviderCapabilities {
    * FTP carries one command per control connection, so `provider-ftp` answers
    * with the size of its channel pool — a per-connection setting, which also
    * falls when a server refuses another login. That makes this the first
-   * capability whose value is neither a constant nor a property of the server,
-   * and it is safe because `TransferQueue` reads it at call time rather than
-   * caching it at connect.
+   * capability whose value is neither a constant nor a property of the server.
+   *
+   * The host reads this once, at connect (`TransferQueue.setConnectionLimit`),
+   * not on every dispatch — so a ceiling that falls mid-session, after the
+   * pool shrinks, is not yet observed by the queue. Nothing breaks: surplus
+   * tasks block inside `FtpPool.acquire` rather than erroring, but they do so
+   * while holding one of the queue's global `#active` slots, which can starve
+   * other connections' transfers until the surplus drains. Making the queue
+   * track a live ceiling is future work.
    */
   readonly maxConcurrency: number;
   /** Whether `list()` is naturally paginated and may be expensive. */
