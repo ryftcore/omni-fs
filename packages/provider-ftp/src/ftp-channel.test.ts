@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { Readable, Writable } from 'node:stream';
 import { NOOP_LOGGER, OmniFsError, collectStream } from '@omni-fs/core';
 import type { Logger, LogLevel } from '@omni-fs/core';
-import { FtpControlChannel, buildAccessOptions } from './ftp-channel.js';
+import { FtpControlChannel, buildAccessOptions, hasSecurityLevels } from './ftp-channel.js';
 import type { FtpClientLike } from './ftp-channel.js';
 import { readSettings } from './settings.js';
 
@@ -61,6 +61,21 @@ describe('buildAccessOptions', () => {
       const options = buildAccessOptions(withSettings({ tlsMinVersion: version }), 'p');
       expect(options.secureOptions?.ciphers, version).toBe('DEFAULT@SECLEVEL=0');
     }
+  });
+
+  it('leaves the cipher list alone where the TLS library has no security levels', () => {
+    // VS Code runs on Electron, whose BoringSSL rejects `@SECLEVEL` outright
+    // with ERR_SSL_INVALID_COMMAND. It has no levels to lower, so the floor
+    // alone is what reaches the old server there.
+    for (const version of ['TLSv1.1', 'TLSv1']) {
+      const options = buildAccessOptions(withSettings({ tlsMinVersion: version }), 'p', false);
+      expect(options.secureOptions?.ciphers, version).toBeUndefined();
+      expect(options.secureOptions?.minVersion, version).toBe(version);
+    }
+  });
+
+  it('knows whether the TLS library it runs on has security levels', () => {
+    expect(hasSecurityLevels()).toBe(!process.versions.openssl.startsWith('0.'));
   });
 
   it('does not relax the cipher policy at TLS 1.2 or above', () => {

@@ -1,4 +1,5 @@
 import { PassThrough, Readable, Writable } from 'node:stream';
+import { createSecureContext } from 'node:tls';
 import { Client } from 'basic-ftp';
 import { OmniFsError, throwIfAborted, withCancellation } from '@omni-fs/core';
 import type { Logger, OmniFsErrorCode } from '@omni-fs/core';
@@ -165,7 +166,11 @@ export type OpenChannel = (options: FtpChannelOptions) => Promise<FtpChannel>;
  * per transfer — a mismatch would fail the data connection rather than the
  * login, which is a far worse error to be handed.
  */
-export function buildAccessOptions(settings: FtpSettings, password: string): AccessOptionsLike {
+export function buildAccessOptions(
+  settings: FtpSettings,
+  password: string,
+  securityLevels: boolean = hasSecurityLevels(),
+): AccessOptionsLike {
   const base = {
     host: settings.host,
     port: settings.port,
@@ -178,9 +183,33 @@ export function buildAccessOptions(settings: FtpSettings, password: string): Acc
   const secureOptions: SecureOptionsLike = {};
   if (settings.allowSelfSigned) secureOptions.rejectUnauthorized = false;
   if (settings.tlsMinVersion !== 'auto') secureOptions.minVersion = settings.tlsMinVersion;
-  if (relaxesCipherPolicy(settings.tlsMinVersion)) secureOptions.ciphers = LEGACY_CIPHERS;
+  if (securityLevels && relaxesCipherPolicy(settings.tlsMinVersion)) {
+    secureOptions.ciphers = LEGACY_CIPHERS;
+  }
 
   return { ...base, secure: settings.secure === 'implicit' ? 'implicit' : true, secureOptions };
+}
+
+let securityLevelsSupported: boolean | undefined;
+
+/**
+ * Whether the TLS library understands `@SECLEVEL`. OpenSSL does; BoringSSL —
+ * what Electron, and therefore VS Code, links instead — has no security levels
+ * and refuses the whole cipher string with `ERR_SSL_INVALID_COMMAND`, so
+ * passing it there turns the legacy setting into a connection that can never
+ * open. Asked of the library rather than inferred from the host, because it is
+ * the library that decides.
+ */
+export function hasSecurityLevels(): boolean {
+  if (securityLevelsSupported === undefined) {
+    try {
+      createSecureContext({ ciphers: LEGACY_CIPHERS });
+      securityLevelsSupported = true;
+    } catch {
+      securityLevelsSupported = false;
+    }
+  }
+  return securityLevelsSupported;
 }
 
 export function relaxesCipherPolicy(version: FtpTlsMinVersion): boolean {
