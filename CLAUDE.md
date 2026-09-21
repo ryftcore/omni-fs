@@ -29,8 +29,9 @@ pnpm --filter @omni-fs/core exec vitest run src/model/path.test.ts
 pnpm --filter @omni-fs/core exec vitest run -t "derives parent and basename"
 ```
 
-Every package has tests. `apps/vscode` is tested separately: `pnpm test:extension` boots the real extension inside an Electron
-extension host and drives `vscode.workspace.fs` over an in-memory provider, and
+Every package has tests. `apps/vscode` is tested separately:
+`pnpm test:extension` boots the real extension inside an Electron extension
+host and drives `vscode.workspace.fs` over an in-memory provider, and
 `pnpm test:extension:live` runs the _minified_ production bundle against the
 `compose.yaml` servers — the only thing that proves esbuild did not break a
 protocol SDK. Neither joins `pnpm test`, which stays hermetic and fast.
@@ -84,8 +85,8 @@ Do not implement one and declare the capability false, or vice versa.
 Callers check it instead of calling and interpreting a failure; the UI greys
 out actions in advance, and `TransferQueue` reads `maxConcurrency` so FTP's
 control-channel pool — one connection unless the user raises it — serialises
-while S3 fans out sixteen ways. Adding a
-capability defaults to "no" for existing providers via `MINIMAL_CAPABILITIES`.
+while S3 fans out sixteen ways. Adding a capability defaults to "no" for
+existing providers via `MINIMAL_CAPABILITIES`.
 
 **`ManagedFileSystem`** (`packages/core/src/fs/`) decorates a raw provider and
 makes every protocol look alike: caching with precise invalidation on mutation,
