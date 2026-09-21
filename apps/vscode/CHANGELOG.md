@@ -3,6 +3,13 @@
 Odd minor versions (0.1.x, 0.3.x) are pre-releases; even minor versions are
 stable.
 
+## 0.1.2
+
+No change in behaviour from 0.1.1.
+
+- The GitHub release carries the `.vsix` again. 0.1.1's release was published
+  without it, and immutable releases cannot have files added afterwards.
+
 ## 0.1.1
 
 Documentation only. No change in behaviour from 0.1.0.
