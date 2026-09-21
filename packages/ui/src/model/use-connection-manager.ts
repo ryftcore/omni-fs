@@ -81,7 +81,7 @@ export function useConnectionManager(backend: ConnectionsBackend): ConnectionMan
     if (state.draft === undefined) return;
     dispatch({ type: 'testStarted' });
     try {
-      const { readOnly: _readOnly, ...input } = saveInputFrom(state.draft);
+      const { readOnly: _readOnly, color: _color, ...input } = saveInputFrom(state.draft);
       dispatch({ type: 'testFinished', outcome: await backend.test(input) });
     } catch (error) {
       dispatch({

@@ -27,6 +27,19 @@
   --omni-badge-bg: var(--vscode-badge-background);
   --omni-badge-fg: var(--vscode-badge-foreground);
   --omni-shadow: var(--vscode-widget-shadow);
+  /* Connection colours: the ones this extension contributes, so the panel
+     shows the same theme-aware shade as the tree and the editor tabs. */
+  --omni-color-red: var(--vscode-omniFs-connectionColor-red);
+  --omni-color-orange: var(--vscode-omniFs-connectionColor-orange);
+  --omni-color-yellow: var(--vscode-omniFs-connectionColor-yellow);
+  --omni-color-green: var(--vscode-omniFs-connectionColor-green);
+  --omni-color-teal: var(--vscode-omniFs-connectionColor-teal);
+  --omni-color-blue: var(--vscode-omniFs-connectionColor-blue);
+  --omni-color-indigo: var(--vscode-omniFs-connectionColor-indigo);
+  --omni-color-purple: var(--vscode-omniFs-connectionColor-purple);
+  --omni-color-pink: var(--vscode-omniFs-connectionColor-pink);
+  --omni-color-brown: var(--vscode-omniFs-connectionColor-brown);
+  --omni-color-gray: var(--vscode-omniFs-connectionColor-gray);
 }
 
 body {

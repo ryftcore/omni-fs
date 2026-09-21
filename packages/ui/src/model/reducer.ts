@@ -2,6 +2,7 @@ import {
   clearSecretField,
   createDraft,
   isDirty,
+  setColor,
   setField,
   setLabel,
   setReadOnly,
@@ -76,6 +77,7 @@ export type ManagerAction =
   | { readonly type: 'secretCleared'; readonly key: string }
   | { readonly type: 'rootPathChanged'; readonly value: string }
   | { readonly type: 'readOnlyChanged'; readonly value: boolean }
+  | { readonly type: 'colorChanged'; readonly value: string | undefined }
   | { readonly type: 'reverted' }
   | { readonly type: 'validationRevealed' }
   | { readonly type: 'testStarted' }
@@ -153,6 +155,7 @@ export function managerReducer(state: ManagerState, action: ManagerAction): Mana
         settings: source.settings,
         ...(source.rootPath !== undefined ? { rootPath: source.rootPath } : {}),
         readOnly: source.readOnly,
+        ...(source.color !== undefined ? { color: source.color } : {}),
       });
 
       return withDraft(
@@ -187,6 +190,9 @@ export function managerReducer(state: ManagerState, action: ManagerAction): Mana
     case 'readOnlyChanged':
       return editDraft(state, (draft) => setReadOnly(draft, action.value));
 
+    case 'colorChanged':
+      return editDraft(state, (draft) => setColor(draft, action.value));
+
     case 'reverted':
       return applySelection(state, state.selection);
 
@@ -220,6 +226,7 @@ export function managerReducer(state: ManagerState, action: ManagerAction): Mana
           settings: { ...state.draft.settings },
           rootPath: state.draft.rootPath,
           readOnly: state.draft.readOnly,
+          color: state.draft.color,
         },
       };
 
@@ -247,6 +254,7 @@ export function saveInputFrom(draft: ConnectionDraft): SaveConnectionInput {
     settings: draft.settings,
     rootPath: draft.rootPath === '/' ? undefined : draft.rootPath,
     readOnly: draft.readOnly,
+    color: draft.color,
     secretPatch: toSecretPatch(draft),
   };
 }
@@ -319,6 +327,7 @@ function applySelection(state: ManagerState, selection: Selection): ManagerState
     settings: connection.settings,
     ...(connection.rootPath !== undefined ? { rootPath: connection.rootPath } : {}),
     readOnly: connection.readOnly,
+    ...(connection.color !== undefined ? { color: connection.color } : {}),
   });
 
   return withDraft({ ...state, selection }, draft, connection.secretFieldsPresent);

@@ -263,3 +263,51 @@ suite('a connection saved with readOnly: true', () => {
     );
   });
 });
+
+const TOGGLE_ID = 'omnifs-test-read-only-toggle';
+
+suite('toggling read-only on a live connection', () => {
+  let connection: TestConnection;
+  const node = (readOnly: boolean): unknown => ({
+    kind: 'connection',
+    config: {
+      id: TOGGLE_ID,
+      providerId: TOGGLE_ID,
+      label: TOGGLE_ID,
+      settings: {},
+      ...(readOnly ? { readOnly: true } : {}),
+    },
+  });
+
+  suiteSetup(async () => {
+    const api = await activateExtension();
+    connection = await connectMemory({ api, id: TOGGLE_ID, seed: { '/notes.txt': 'first' } });
+    // Live before the toggle, so the test covers the case that used to need a
+    // reconnect: the wrapper built for a writable connection must not outlive
+    // the flag.
+    await vscode.workspace.fs.writeFile(connection.uri('/notes.txt'), bytes('second'));
+  });
+
+  suiteTeardown(async () => {
+    await connection?.dispose();
+  });
+
+  test('Make Read-only takes effect on the next write, without reconnecting', async () => {
+    await vscode.commands.executeCommand('omniFs.makeReadOnly', node(false));
+
+    await assert.rejects(
+      async () => vscode.workspace.fs.writeFile(connection.uri('/notes.txt'), bytes('third')),
+      (error: unknown) => isFileSystemError(error, 'NoPermissions'),
+    );
+    const stat = await vscode.workspace.fs.stat(connection.uri('/notes.txt'));
+    assert.equal(stat.permissions, vscode.FilePermission.Readonly);
+    assert.equal(text(await vscode.workspace.fs.readFile(connection.uri('/notes.txt'))), 'second');
+  });
+
+  test('Make Writable lifts it again', async () => {
+    await vscode.commands.executeCommand('omniFs.makeWritable', node(true));
+
+    await vscode.workspace.fs.writeFile(connection.uri('/notes.txt'), bytes('fourth'));
+    assert.equal(text(await vscode.workspace.fs.readFile(connection.uri('/notes.txt'))), 'fourth');
+  });
+});

@@ -18,6 +18,7 @@ import {
   statusLabel,
   TextField,
 } from './primitives/index.js';
+import { ColorPicker } from './ColorPicker.js';
 import { SchemaField } from './SchemaField.js';
 
 export function ConnectionForm(props: {
@@ -37,6 +38,7 @@ export function ConnectionForm(props: {
   readonly onSecretClear: (key: string) => void;
   readonly onRootPathChange: (value: string) => void;
   readonly onReadOnlyChange: (value: boolean) => void;
+  readonly onColorChange: (value: string | undefined) => void;
   readonly onPickFile: (key: string) => void;
   readonly onTest: () => void;
   readonly onRevert: () => void;
@@ -125,6 +127,18 @@ export function ConnectionForm(props: {
                 value={props.provider.displayName}
                 readOnly
                 onChange={() => undefined}
+              />
+            </FormRow>
+
+            <FormRow
+              label="Color"
+              htmlFor="omni-color"
+              help="Tags this connection wherever it appears, so production is hard to mistake for staging."
+            >
+              <ColorPicker
+                id="omni-color"
+                value={props.draft.color}
+                onChange={props.onColorChange}
               />
             </FormRow>
           </Group>
