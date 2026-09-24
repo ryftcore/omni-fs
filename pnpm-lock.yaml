@@ -304,11 +304,11 @@ importers:
   packages/provider-s3:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: ^3.1135.0
-        version: 3.1135.0
+        specifier: ^3.1136.0
+        version: 3.1136.0
       '@aws-sdk/lib-storage':
-        specifier: ^3.1135.0
-        version: 3.1135.0(@aws-sdk/client-s3@3.1135.0)
+        specifier: ^3.1136.0
+        version: 3.1136.0(@aws-sdk/client-s3@3.1136.0)
       '@omni-fs/core':
         specifier: workspace:*
         version: link:../core
@@ -357,8 +357,8 @@ importers:
         specifier: workspace:*
         version: link:../core
       webdav:
-        specifier: ^5.7.1
-        version: 5.10.0
+        specifier: ^5.11.0
+        version: 5.11.0
     devDependencies:
       '@omni-fs/testing':
         specifier: workspace:*
@@ -420,8 +420,8 @@ packages:
     resolution: {integrity: sha512-6uTniZc87q+B5eXouGTl+7Tmc482rEeCcvxpsvREP8EfF0gvloRZ41UOA9sbSJlyy8TbqIBXb3kKfKarEArUQA==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-s3@3.1135.0':
-    resolution: {integrity: sha512-/1CVA0M+TaEOzgM02DUST1NzQTjbY8OumDKPETjzo4owypkZZMxu1ADecFbzeG73hje/XLNAJfGepQ3a40CGnw==}
+  '@aws-sdk/client-s3@3.1136.0':
+    resolution: {integrity: sha512-1FUvu6nuUi3y9VjQAYootkfWKQqZ8aT8wZoV5I0bpeMkGVgntYpJ11xLicGotGE6E1qtLXB+GdOJM9B+OQYWDA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.978.0':
@@ -460,11 +460,11 @@ packages:
     resolution: {integrity: sha512-uylIQSUWpfLuH2LovxEEfwzJGM/SabLOfLMg6YXu/E8jJEKUdpdILCVCQCdFvHyu/7dLJOHPMfrSwduxO56NkQ==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/lib-storage@3.1135.0':
-    resolution: {integrity: sha512-KbRyRlvtlmdV6R2DwfjkXVUXI6UgAb/1hIW60Aaj/w4zOuz7yimqctuGaORK+fH0XZtdJGKD98PplwyaznpuYw==}
+  '@aws-sdk/lib-storage@3.1136.0':
+    resolution: {integrity: sha512-oosImwm5kgYTDySuQZ/bCCCISf6cETUDS6Q1MhIyZ7+oZLiacKxKqqQz59/Ic+V9iiNZOXXbEgANChm2WveXsg==}
     engines: {node: '>=20.0.0'}
     peerDependencies:
-      '@aws-sdk/client-s3': ^3.1135.0
+      '@aws-sdk/client-s3': ^3.1136.0
 
   '@aws-sdk/middleware-sdk-s3@3.972.76':
     resolution: {integrity: sha512-NfnTkVUTBKTBuBgqaapFK9r3YdkKt1b2oRvgLzZq91bwNKh6ZS0S7sEcheguttREaL4iyfs/xQnqD7Z7AsWSsA==}
@@ -3662,8 +3662,8 @@ packages:
     resolution: {integrity: sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw==}
     engines: {node: '>= 8'}
 
-  webdav@5.10.0:
-    resolution: {integrity: sha512-fVPuRLtcduVGvSO7Tn/6TQCzIvI/g6BO/+xPRctCvi/GytYpjn4czxWbh4HsArsdom9qz9BI63k9/v2HBUui1A==}
+  webdav@5.11.0:
+    resolution: {integrity: sha512-DbUS8rHvWse55EiHM0q5q1z3eVRCLWW7Va7mUqA2/JJdQHIew4Op2HTglHkBJDOAVrQeQf0I+REUJkIrYqtL+w==}
     engines: {node: '>=14'}
 
   whatwg-encoding@3.1.1:
@@ -3795,7 +3795,7 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/client-s3@3.1135.0':
+  '@aws-sdk/client-s3@3.1136.0':
     dependencies:
       '@aws-sdk/checksums': 3.1001.0
       '@aws-sdk/core': 3.978.0
@@ -3904,9 +3904,9 @@ snapshots:
       '@smithy/types': 4.18.0
       tslib: 2.8.1
 
-  '@aws-sdk/lib-storage@3.1135.0(@aws-sdk/client-s3@3.1135.0)':
+  '@aws-sdk/lib-storage@3.1136.0(@aws-sdk/client-s3@3.1136.0)':
     dependencies:
-      '@aws-sdk/client-s3': 3.1135.0
+      '@aws-sdk/client-s3': 3.1136.0
       '@smithy/core': 3.34.1
       '@smithy/types': 4.18.0
       buffer: 5.6.0
@@ -7107,9 +7107,10 @@ snapshots:
 
   web-streams-polyfill@3.3.3: {}
 
-  webdav@5.10.0:
+  webdav@5.11.0:
     dependencies:
       '@buttercup/fetch': 0.2.1
+      '@nodable/entities': 3.0.0
       base-64: 1.0.0
       byte-length: 1.0.2
       entities: 6.0.1

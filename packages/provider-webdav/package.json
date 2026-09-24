@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@omni-fs/core": "workspace:*",
-    "webdav": "^5.7.1"
+    "webdav": "^5.11.0"
   },
   "devDependencies": {
     "@omni-fs/testing": "workspace:*",
