@@ -26,6 +26,17 @@ updates:
     commit-message:
       prefix: ':arrow_up: build'
 
+  # compose.yaml pins the MinIO image by digest for the same reason, and
+  # Chainguard only publishes `latest` without an account, so the digest is
+  # the only thing that can move.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ':arrow_up: build'
+
   - package-ecosystem: npm
     directory: /
     schedule:

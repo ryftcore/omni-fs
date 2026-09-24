@@ -31,8 +31,15 @@ name: omni-fs-dev
 services:
   # --- S3 -------------------------------------------------------------------
   # Console: http://localhost:9001  (omnifs / omnifs-dev-secret)
+  #
+  # Chainguard's build of MinIO. As of September 2026 quay.io refuses
+  # anonymous pulls of MinIO's own images, `minio/minio` and `minio/mc`, and
+  # Docker Hub no longer has them. Pinned by digest, which Dependabot bumps.
+  #
+  # It runs as a non-root user, so a `minio-data` volume that the old image
+  # wrote as root is not writable by it: `docker compose down -v` once.
   minio:
-    image: quay.io/minio/minio:latest
+    image: cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: omnifs
@@ -52,7 +59,9 @@ services:
   # not really exist on an object store, a file big enough for ranged reads,
   # and an empty bucket for the empty-listing case.
   minio-init:
-    image: quay.io/minio/mc:latest
+    # The server image again, for its shell: Chainguard's `mc`-only image has
+    # none, and this script needs one, and `head`.
+    image: cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
     depends_on:
       minio:
         condition: service_healthy
