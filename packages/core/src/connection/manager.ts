@@ -253,6 +253,13 @@ export class ConnectionManager implements AsyncDisposable {
     if (fs === undefined) return;
 
     this.#loggerFor(id).log('info', 'Disconnected', { connectionId: id, reason });
+    // Reported as soon as the entry leaves `#live`, not once the close below
+    // has finished. Closing an SFTP or FTP session is a network exchange, and
+    // for its whole length a caller that trusts `getState` — the tree, deciding
+    // whether a node may be listed — would read `connected`, call `acquire`,
+    // and dial a fresh connection. Reporting it afterwards would also stamp
+    // `disconnected` over a connection opened in the meantime.
+    this.#setState(id, { status: 'disconnected' });
 
     try {
       await fs[Symbol.asyncDispose]();
@@ -262,7 +269,6 @@ export class ConnectionManager implements AsyncDisposable {
         error: String(error),
       });
     }
-    this.#setState(id, { status: 'disconnected' });
   }
 
   /** Call after editing a config so the next acquire uses the new settings. */
