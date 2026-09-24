@@ -156,7 +156,11 @@ export class WebdavFileSystem implements RemoteFileSystem {
     // surfaces later as an error event on the stream, not as a rejection
     // here. `translateReadStream` gives that late error the same
     // `OmniFsError` translation `stat` and `list` get through `#run`.
-    const web = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+    //
+    // Since 5.11 the library types that stream as its platform-neutral
+    // `ReadableLike`; the Node build still returns a `PassThrough`, and the
+    // extension bundles the Node build, so narrowing it back is safe.
+    const web = Readable.toWeb(stream as Readable) as ReadableStream<Uint8Array>;
     return translateReadStream(web, path.value);
   }
 

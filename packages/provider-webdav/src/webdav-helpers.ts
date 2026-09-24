@@ -207,7 +207,10 @@ export function openWriteStream(
   });
   stream.on('error', fail);
 
-  const web = Writable.toWeb(stream) as WritableStream<Uint8Array>;
+  // Typed as the library's platform-neutral `WritableLike` since 5.11, but the
+  // Node build still returns a `PassThrough` — see
+  // `WebdavFileSystem.createReadStream`.
+  const web = Writable.toWeb(stream as Writable) as WritableStream<Uint8Array>;
   // `overwrite: false` is what puts `If-None-Match: *` on the PUT, so it is
   // also what decides whether the 412 that may come back names the destination
   // or a lost `If-Match`. See `translateWriteStream`.
