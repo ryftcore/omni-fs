@@ -88,6 +88,10 @@ and then fails, naming the server.
 
 Console at <http://localhost:9001> (`omnifs` / `omnifs-dev-secret`).
 
+The image is Chainguard's build of MinIO, since MinIO's own images can no longer
+be pulled anonymously. It runs as a non-root user, so if your `minio-data`
+volume predates the switch, run `docker compose down -v` once.
+
 | Field                       | Value                                                    |
 | --------------------------- | -------------------------------------------------------- |
 | Bucket                      | `omni-fs-test` (`omni-fs-empty` tests the empty listing) |
