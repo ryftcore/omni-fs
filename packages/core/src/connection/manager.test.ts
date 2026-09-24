@@ -27,6 +27,8 @@ interface StubBehaviour {
   readonly failOnCreate?: () => never;
   /** Ask for the credential during connect, the way a real provider does. */
   readonly needsSecret?: boolean;
+  /** Runs inside `asyncDispose`, the way closing an SFTP session takes a round trip. */
+  readonly dispose?: () => Promise<void>;
 }
 
 interface Stub {
@@ -63,6 +65,7 @@ function stubProvider(behaviour: StubBehaviour = {}): Stub {
         writeFile: async () => undefined,
         delete: async () => undefined,
         [Symbol.asyncDispose]: async () => {
+          await behaviour.dispose?.();
           disposed.push(fs);
         },
       } as unknown as RemoteFileSystem;
@@ -307,6 +310,38 @@ describe('ConnectionManager', () => {
       const { manager } = await setup();
 
       await expect(manager.disconnect('c1')).resolves.toBeUndefined();
+    });
+
+    it('reports disconnected while the close is still under way', async () => {
+      let finishClose = (): void => {};
+      const closing = new Promise<void>((resolve) => (finishClose = resolve));
+      const { manager, stub } = await setup({ dispose: () => closing });
+      await manager.acquire('c1');
+
+      const disconnected = manager.disconnect('c1');
+
+      // Anyone deciding whether to list the connection now must not read
+      // `connected`, or it calls `acquire` and dials a new one.
+      expect(manager.getState('c1').status).toBe('disconnected');
+      expect(stub.disposed).toHaveLength(0);
+      finishClose();
+      await disconnected;
+      expect(stub.disposed).toHaveLength(1);
+    });
+
+    it('leaves a connection opened during a slow close reported as connected', async () => {
+      let finishClose = (): void => {};
+      const closing = new Promise<void>((resolve) => (finishClose = resolve));
+      const { manager, stub } = await setup({ dispose: () => closing });
+      await manager.acquire('c1');
+
+      const disconnected = manager.disconnect('c1');
+      const reopened = await manager.acquire('c1');
+      finishClose();
+      await disconnected;
+
+      expect(reopened).toBe(stub.created[1]);
+      expect(manager.getState('c1').status).toBe('connected');
     });
 
     it('opens a fresh connection after an invalidate', async () => {
