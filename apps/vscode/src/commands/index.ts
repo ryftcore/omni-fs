@@ -13,8 +13,8 @@ import type { InitialSelection } from '@omni-fs/ui';
 import { describeError } from '../host/describe-error.js';
 import { ConnectionManagerPanel } from '../webview/connection-manager-panel.js';
 import type { ConnectionNode, ConnectionsTreeProvider } from '../views/connections-tree.js';
-import type { MountResult, WorkspaceMounts } from '../workspace/workspace-mounts.js';
-import { forgetConnection, logUnconfirmed } from './forget-connection.js';
+import type { MountResult, UnmountResult, WorkspaceMounts } from '../workspace/workspace-mounts.js';
+import { forgetConnection, reportUnmount } from './forget-connection.js';
 
 export interface CommandDeps {
   readonly extensionUri: vscode.Uri;
@@ -161,17 +161,11 @@ async function disconnect(deps: CommandDeps, node?: ConnectionNode): Promise<voi
   const config = await resolveConfig(deps, node);
   if (config === undefined) return;
 
-  const unmounted = await deps.mounts.unmount(config.id);
-  if (unmounted === 'refused') {
-    deps.logger.log('warn', 'Could not remove a disconnected connection from the workspace', {
-      connectionId: config.id,
-    });
-    void vscode.window.showWarningMessage(
-      `Omni-FS: "${config.label}" is still in the workspace, so opening its folder will reconnect it.`,
-    );
-  } else if (unmounted === 'unconfirmed') {
-    logUnconfirmed(deps.logger, config.id);
-  }
+  reportUnmount(deps.logger, config.id, await deps.mounts.unmount(config.id), {
+    level: 'warn',
+    log: 'Could not remove a disconnected connection from the workspace',
+    show: `Omni-FS: "${config.label}" is still in the workspace, so opening its folder will reconnect it.`,
+  });
 
   await deps.manager.disconnect(config.id);
   deps.cache.invalidateConnection(config.id);
@@ -231,6 +225,7 @@ async function mount(deps: CommandDeps, node?: ConnectionNode): Promise<MountRes
   if (result === 'refused') {
     deps.logger.log('error', 'Could not add a connection to the workspace', {
       connectionId: config.id,
+      uri: deps.mounts.rootUri(config).toString(),
     });
     void vscode.window.showErrorMessage(`Could not add "${config.label}" to the workspace.`);
     return 'refused';
@@ -245,23 +240,26 @@ async function mount(deps: CommandDeps, node?: ConnectionNode): Promise<MountRes
  * timeout like any other — unless the folder was the workspace's first. VS
  * Code then restarts the extension host, and this connection and every other
  * one close with it.
+ *
+ * Resolves to what happened, for whoever runs the command programmatically.
  */
-async function removeFromWorkspace(deps: CommandDeps, node?: ConnectionNode): Promise<void> {
+async function removeFromWorkspace(
+  deps: CommandDeps,
+  node?: ConnectionNode,
+): Promise<UnmountResult | undefined> {
   const config = await resolveConfig(deps, node, {
     only: (candidate) => deps.mounts.isMounted(candidate.id),
     none: 'No connection is open in the workspace.',
   });
-  if (config === undefined) return;
+  if (config === undefined) return undefined;
 
   const unmounted = await deps.mounts.unmount(config.id);
-  if (unmounted === 'refused') {
-    deps.logger.log('error', 'Could not remove a connection from the workspace', {
-      connectionId: config.id,
-    });
-    void vscode.window.showErrorMessage(`Could not remove "${config.label}" from the workspace.`);
-  } else if (unmounted === 'unconfirmed') {
-    logUnconfirmed(deps.logger, config.id);
-  }
+  reportUnmount(deps.logger, config.id, unmounted, {
+    level: 'error',
+    log: 'Could not remove a connection from the workspace',
+    show: `Could not remove "${config.label}" from the workspace.`,
+  });
+  return unmounted;
 }
 
 /**

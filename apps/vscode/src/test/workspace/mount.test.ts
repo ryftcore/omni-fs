@@ -117,8 +117,13 @@ suite('a connection as a workspace folder', () => {
     await vscode.workspace.fs.readDirectory(connection.uri('/'));
     assert.equal(connection.disk.isAlive(), true);
 
-    await expectFolderChange(() =>
-      vscode.commands.executeCommand('omniFs.removeFromWorkspace', node),
+    await expectFolderChange(async () =>
+      // `removed`, not `unconfirmed`: the change VS Code reported named the
+      // folder the way the confirmation expects it to.
+      assert.equal(
+        await vscode.commands.executeCommand('omniFs.removeFromWorkspace', node),
+        'removed',
+      ),
     );
 
     assert.deepEqual(omnifsFolders(), []);

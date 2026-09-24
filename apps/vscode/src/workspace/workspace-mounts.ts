@@ -42,7 +42,7 @@ export class WorkspaceMounts implements vscode.Disposable {
   readonly #emitter = new vscode.EventEmitter<void>();
   readonly #subscription: vscode.Disposable;
 
-  /** Fires after any change to the workspace folders, from whichever side. */
+  /** Fires after a change that adds or removes a connection's folder, from whichever side. */
   readonly onDidChange = this.#emitter.event;
 
   constructor(
@@ -51,7 +51,21 @@ export class WorkspaceMounts implements vscode.Disposable {
   ) {
     this.#host = host;
     this.#confirmTimeoutMs = options.confirmTimeoutMs ?? 2000;
-    this.#subscription = host.onDidChangeWorkspaceFolders(() => this.#emitter.fire());
+    // Only changes that involve a connection: adding a local folder must not
+    // redraw the tree, which re-lists every expanded folder of every connected
+    // connection — on S3, each one a paid LIST.
+    this.#subscription = host.onDidChangeWorkspaceFolders((event) => {
+      if (
+        [...event.added, ...event.removed].some((folder) => folder.uri.scheme === OMNI_FS_SCHEME)
+      ) {
+        this.#emitter.fire();
+      }
+    });
+  }
+
+  /** The folder URI `mount` opens for this connection. */
+  rootUri(config: ConnectionConfig): vscode.Uri {
+    return OmniFileSystemProvider.toUri(config.id, RemotePath.parse(config.rootPath ?? '/'));
   }
 
   /** This connection's folders, in workspace order. */
@@ -81,19 +95,20 @@ export class WorkspaceMounts implements vscode.Disposable {
     // which is indistinguishable from any other refusal.
     if (this.isMounted(config.id)) return 'already-mounted';
 
-    const uri = OmniFileSystemProvider.toUri(config.id, RemotePath.parse(config.rootPath ?? '/'));
-    const confirmed = this.#confirmation();
-    const added = this.#host.updateWorkspaceFolders(this.#host.workspaceFolders?.length ?? 0, 0, {
-      uri,
-      name: config.label,
-    });
-    if (!added) {
-      confirmed.cancel();
-      return 'refused';
-    }
+    const uri = this.rootUri(config);
+    const confirmed = this.#update(
+      [uri],
+      (event) => event.added,
+      () =>
+        this.#host.updateWorkspaceFolders(this.#host.workspaceFolders?.length ?? 0, 0, {
+          uri,
+          name: config.label,
+        }),
+    );
+    if (confirmed === undefined) return 'refused';
     // Not whether it was confirmed: VS Code stats a folder before adding it,
     // so a slow server alone outlasts the wait, and the folder still arrives.
-    await confirmed.done;
+    await confirmed;
     return 'added';
   }
 
@@ -105,32 +120,37 @@ export class WorkspaceMounts implements vscode.Disposable {
    * workspace this version did not write — one saved by 0.1.3 or earlier,
    * which added a second folder when a connection was reopened after a
    * `rootPath` edit, or one edited by hand — and they need not be adjacent.
-   * Each adjacent run is removed with a call of its own, highest first so the
-   * indices below stay valid, and a run at index 0, whose removal restarts
-   * the extension host, comes last. Nothing is ever re-added in between: VS
-   * Code stats every folder it adds, which would connect another connection
-   * just to remove this one.
+   * Each adjacent run is removed with a call of its own, highest first, so a
+   * run at index 0, whose removal restarts the extension host, comes last.
+   * Nothing is ever re-added in between: VS Code stats every folder it adds,
+   * which would connect another connection just to remove this one.
    *
    * One call at a time, because VS Code refuses an update while the previous
    * one is unconfirmed; so a run whose confirmation timed out usually makes
-   * the next one `refused`.
+   * the next one `refused`. And the folders are read again before each call,
+   * because the user can change them during the wait, and an index read
+   * before it could then name somebody else's folder.
    */
   async unmount(connectionId: ConnectionId): Promise<UnmountResult> {
-    const runs = adjacentRuns(
-      (this.#host.workspaceFolders ?? []).flatMap((folder, index) =>
-        belongsTo(folder.uri, connectionId) ? [index] : [],
-      ),
-    );
-    if (runs.length === 0) return 'not-mounted';
+    const runs = this.#runsOf(connectionId).length;
+    if (runs === 0) return 'not-mounted';
 
     let result: UnmountResult = 'removed';
-    for (const run of runs.reverse()) {
-      const confirmed = this.#confirmation();
-      if (!this.#host.updateWorkspaceFolders(run.start, run.count)) {
-        confirmed.cancel();
-        return 'refused';
-      }
-      if (!(await confirmed.done)) result = 'unconfirmed';
+    // Bounded by the runs there were: a folder of this connection that
+    // appears meanwhile was not asked to be removed.
+    for (let removed = 0; removed < runs; removed += 1) {
+      const folders = this.#host.workspaceFolders ?? [];
+      const run = this.#runsOf(connectionId).at(-1);
+      if (run === undefined) break;
+
+      const uris = folders.slice(run.start, run.start + run.count).map((folder) => folder.uri);
+      const confirmed = this.#update(
+        uris,
+        (event) => event.removed,
+        () => this.#host.updateWorkspaceFolders(run.start, run.count),
+      );
+      if (confirmed === undefined) return 'refused';
+      if (!(await confirmed)) result = 'unconfirmed';
     }
     return result;
   }
@@ -140,27 +160,60 @@ export class WorkspaceMounts implements vscode.Disposable {
     this.#emitter.dispose();
   }
 
+  /** This connection's folders, as runs of adjacent indices. */
+  #runsOf(connectionId: ConnectionId): { start: number; count: number }[] {
+    return adjacentRuns(
+      (this.#host.workspaceFolders ?? []).flatMap((folder, index) =>
+        belongsTo(folder.uri, connectionId) ? [index] : [],
+      ),
+    );
+  }
+
   /**
-   * Settles true on the next folder change, or false after the timeout or a
-   * cancel, whichever comes first. Subscribed before the update is requested,
-   * so a host that reports synchronously is not missed.
+   * Requests an update, and returns whether VS Code reported it — or
+   * `undefined` when it refused the request outright.
    *
-   * Bounded, because nothing guarantees the report. A workspace file VS Code
-   * cannot write fails with its own error and no event, and a window that has
-   * to enter a new workspace restarts the extension host instead.
+   * Reported means a folder change that names every one of `uris` on the
+   * side `pick` reads. Any change would not do: a folder the user adds
+   * during the wait would count as this removal, and the next request would
+   * be sent while this one is still pending, which VS Code refuses.
+   *
+   * Subscribed before the update is requested, so a host that reports
+   * synchronously is not missed. Bounded, because nothing guarantees the
+   * report: a workspace file VS Code cannot write fails with its own error
+   * and no event, and a window that has to enter a new workspace restarts
+   * the extension host instead.
    */
-  #confirmation(): { readonly done: Promise<boolean>; cancel(): void } {
+  #update(
+    uris: readonly vscode.Uri[],
+    pick: (event: vscode.WorkspaceFoldersChangeEvent) => readonly vscode.WorkspaceFolder[],
+    request: () => boolean,
+  ): Promise<boolean> | undefined {
+    // `toString()` is how VS Code itself compares folders; it lowercases the
+    // authority, which the folders it reports back may already have.
+    const expected = new Set(uris.map((uri) => uri.toString()));
     let settle = (_confirmed: boolean): void => {};
     const done = new Promise<boolean>((resolve) => {
       const timer = setTimeout(() => settle(false), this.#confirmTimeoutMs);
-      const subscription = this.#host.onDidChangeWorkspaceFolders(() => settle(true));
+      const subscription = this.#host.onDidChangeWorkspaceFolders((event) => {
+        const reported = new Set(pick(event).map((folder) => folder.uri.toString()));
+        if ([...expected].every((uri) => reported.has(uri))) settle(true);
+      });
       settle = (confirmed) => {
         clearTimeout(timer);
         subscription.dispose();
         resolve(confirmed);
       };
     });
-    return { done, cancel: () => settle(false) };
+
+    try {
+      if (request()) return done;
+    } catch (error) {
+      settle(false);
+      throw error;
+    }
+    settle(false);
+    return undefined;
   }
 }
 
