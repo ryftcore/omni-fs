@@ -180,7 +180,7 @@ services:
   # observable point, which is what lets the CI job wait for the servers and
   # get the buckets for free.
   file-seed:
-    image: alpine:3.20
+    image: alpine:3.24
     depends_on:
       minio-init:
         condition: service_completed_successfully
