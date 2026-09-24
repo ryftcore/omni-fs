@@ -8,7 +8,7 @@ import {
   NOOP_LOGGER,
   ProviderRegistry,
 } from '@omni-fs/core';
-import type { ConnectionConfig } from '@omni-fs/core';
+import type { ConnectionConfig, DirEntry, Logger, LogLevel } from '@omni-fs/core';
 import { MemoryFileSystem, memoryProvider } from '@omni-fs/testing';
 import { forgetConnection } from '../../commands/forget-connection.js';
 import type { ForgetDeps } from '../../commands/forget-connection.js';
@@ -33,7 +33,27 @@ class FakeWorkspace implements WorkspaceFoldersHost {
   #folders: vscode.WorkspaceFolder[];
   #pending = false;
 
-  readonly onDidChangeWorkspaceFolders = this.#emitter.event;
+  /** Subscriptions not yet disposed, so a test can see one left behind. */
+  listening = 0;
+  readonly onDidChangeWorkspaceFolders: vscode.Event<vscode.WorkspaceFoldersChangeEvent> = (
+    listener,
+    thisArgs,
+  ) => {
+    const subscription = this.#emitter.event(listener, thisArgs);
+    this.listening += 1;
+    let disposed = false;
+    return new vscode.Disposable(() => {
+      if (disposed) return;
+      disposed = true;
+      this.listening -= 1;
+      subscription.dispose();
+    });
+  };
+  /**
+   * Applied to the folders just before the next update is reported, as a
+   * change the user makes while an update is pending.
+   */
+  meanwhile: ((folders: vscode.WorkspaceFolder[]) => vscode.WorkspaceFolder[]) | undefined;
   /** Every update requested, refused ones included. */
   readonly calls: { start: number; deleteCount: number; added: string[] }[] = [];
   /**
@@ -54,6 +74,11 @@ class FakeWorkspace implements WorkspaceFoldersHost {
   /** The folder URIs as VS Code would write them out. */
   get uris(): string[] {
     return this.#folders.map((folder) => folder.uri.toString());
+  }
+
+  /** Reports a change nobody here asked for. */
+  announce(event: vscode.WorkspaceFoldersChangeEvent): void {
+    this.#emitter.fire(event);
   }
 
   updateWorkspaceFolders(
@@ -83,6 +108,13 @@ class FakeWorkspace implements WorkspaceFoldersHost {
     const added = this.#folders.slice(start, start + add.length);
     setTimeout(() => {
       this.#pending = false;
+      if (this.meanwhile !== undefined) {
+        this.#folders = this.meanwhile(this.#folders).map((folder, index) => ({
+          ...folder,
+          index,
+        }));
+        this.meanwhile = undefined;
+      }
       if (this.reports) this.#emitter.fire({ added, removed });
     }, 0);
     return true;
@@ -91,6 +123,32 @@ class FakeWorkspace implements WorkspaceFoldersHost {
 
 function config(id: string, extra: Partial<ConnectionConfig> = {}): ConnectionConfig {
   return { id, providerId: id, label: `${id} label`, settings: {}, ...extra };
+}
+
+/**
+ * Cleanup registered as things are made, and run by `teardown`, so a failed
+ * assertion does not leave a live connection or a subscription behind.
+ */
+function cleanups(): (dispose: () => unknown) => void {
+  const pending: (() => unknown)[] = [];
+  teardown(async () => {
+    for (const dispose of pending.splice(0).reverse()) await dispose();
+  });
+  return (dispose) => pending.push(dispose);
+}
+
+function manager(options: {
+  registry: ProviderRegistry;
+  configStore: InMemoryConfigStore;
+  secretStore?: InMemorySecretStore;
+  logger?: Logger;
+}): ConnectionManager {
+  return new ConnectionManager({
+    registry: options.registry,
+    configStore: options.configStore,
+    secretStore: options.secretStore ?? new InMemorySecretStore(),
+    logger: options.logger ?? NOOP_LOGGER,
+  });
 }
 
 suite('WorkspaceMounts', () => {
@@ -209,20 +267,74 @@ suite('WorkspaceMounts', () => {
     assert.equal(await mounts.mount(config('prod')), 'added');
   });
 
-  test('says when the folders change', async () => {
+  test('reads the folders again before each removal', async () => {
+    const host = new FakeWorkspace(
+      'file:///a',
+      'file:///b',
+      'omnifs://prod/x',
+      'omnifs://staging/',
+      'omnifs://prod/y',
+    );
+    // The user removes a folder above them while the first removal is pending.
+    host.meanwhile = (folders) => folders.filter((folder) => folder.uri.path !== '/a');
+    mounts = new WorkspaceMounts(host);
+
+    assert.equal(await mounts.unmount('prod'), 'removed');
+
+    // Index 2 now names `staging`; the second removal must not.
+    assert.deepEqual(host.calls, [
+      { start: 4, deleteCount: 1, added: [] },
+      { start: 1, deleteCount: 1, added: [] },
+    ]);
+    assert.deepEqual(host.uris, ['file:///b', 'omnifs://staging/']);
+  });
+
+  test('is confirmed by the change that names its folder, not by any change', async () => {
+    const host = new FakeWorkspace('omnifs://prod/', 'file:///a');
+    host.reports = false;
+    mounts = new WorkspaceMounts(host, { confirmTimeoutMs: 100 });
+
+    const unmounted = mounts.unmount('prod');
+    host.announce({
+      added: [{ uri: vscode.Uri.parse('file:///b'), name: 'b', index: 1 }],
+      removed: [],
+    });
+
+    assert.equal(await unmounted, 'unconfirmed');
+  });
+
+  test('stops listening when VS Code throws instead of answering', async () => {
+    const host = new FakeWorkspace('file:///a');
+    host.updateWorkspaceFolders = () => {
+      throw new Error('extension host stopped');
+    };
+    mounts = new WorkspaceMounts(host);
+    const relaying = host.listening;
+
+    await assert.rejects(mounts.mount(config('prod')), /extension host stopped/);
+
+    assert.equal(host.listening, relaying);
+  });
+
+  test('says when a connection folder comes or goes, and only then', async () => {
     const host = new FakeWorkspace('file:///a');
     mounts = new WorkspaceMounts(host);
     let changes = 0;
     mounts.onDidChange(() => (changes += 1));
 
-    await mounts.mount(config('prod'));
+    // A local folder: redrawing the tree for it would re-list every connection.
+    host.updateWorkspaceFolders(1, 0, { uri: vscode.Uri.parse('file:///b') });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.equal(changes, 0);
 
+    await mounts.mount(config('prod'));
     assert.equal(changes, 1);
   });
 });
 
 suite('the connections tree while a connection is mounted', () => {
   const ID = 'mounts-tree';
+  const later = cleanups();
 
   interface Menu {
     readonly command: string;
@@ -257,27 +369,23 @@ suite('the connections tree while a connection is mounted', () => {
     const configStore = new InMemoryConfigStore();
     const stored = config(ID, options.readOnly ? { readOnly: true } : {});
     await configStore.save(stored);
-    const manager = new ConnectionManager({
-      registry,
-      configStore,
-      secretStore: new InMemorySecretStore(),
-      logger: NOOP_LOGGER,
-    });
-    if (options.connected) await manager.acquire(ID);
+    const connections = manager({ registry, configStore });
+    later(() => connections[Symbol.asyncDispose]());
+    if (options.connected) await connections.acquire(ID);
 
+    const mounts = new WorkspaceMounts(
+      new FakeWorkspace('file:///local', ...(options.mounted ? [`omnifs://${ID}/`] : [])),
+    );
+    later(() => mounts.dispose());
     const tree = new ConnectionsTreeProvider({
-      manager,
+      manager: connections,
       configStore,
       registry,
       cache: new EntryCache(),
       logger: NOOP_LOGGER,
-      mounts: new WorkspaceMounts(
-        new FakeWorkspace('file:///local', ...(options.mounted ? [`omnifs://${ID}/`] : [])),
-      ),
+      mounts,
     });
-    const item = tree.getTreeItem({ kind: 'connection', config: stored });
-    await manager[Symbol.asyncDispose]();
-    return item;
+    return tree.getTreeItem({ kind: 'connection', config: stored });
   }
 
   for (const connected of [true, false]) {
@@ -317,17 +425,14 @@ suite('the connections tree while a connection is mounted', () => {
   });
 
   test('redraws when the workspace folders change', async () => {
-    const host = new FakeWorkspace('file:///local');
-    const mounts = new WorkspaceMounts(host);
+    const mounts = new WorkspaceMounts(new FakeWorkspace('file:///local'));
+    later(() => mounts.dispose());
     const registry = new ProviderRegistry();
     const configStore = new InMemoryConfigStore();
+    const connections = manager({ registry, configStore });
+    later(() => connections[Symbol.asyncDispose]());
     const tree = new ConnectionsTreeProvider({
-      manager: new ConnectionManager({
-        registry,
-        configStore,
-        secretStore: new InMemorySecretStore(),
-        logger: NOOP_LOGGER,
-      }),
+      manager: connections,
       configStore,
       registry,
       cache: new EntryCache(),
@@ -336,44 +441,96 @@ suite('the connections tree while a connection is mounted', () => {
     });
     let redraws = 0;
     const subscription = tree.onDidChangeTreeData(() => (redraws += 1));
+    later(() => subscription.dispose());
 
     await mounts.mount(config(ID));
 
     assert.equal(redraws, 1);
-    subscription.dispose();
-    mounts.dispose();
+  });
+
+  test('does not report a listing that a disconnect cut short as an error', async () => {
+    // Disconnect removes the folder first, and that change redraws the tree
+    // just before the connection closes under the listing it started.
+    let closeUnderIt = (): void => {};
+    const closed = new Promise<void>((resolve) => (closeUnderIt = resolve));
+    class ClosingDisk extends MemoryFileSystem {
+      override list(): AsyncIterable<DirEntry> {
+        return {
+          [Symbol.asyncIterator]: () => ({
+            next: async (): Promise<IteratorResult<DirEntry>> => {
+              await closed;
+              throw new Error('connection closed');
+            },
+          }),
+        };
+      }
+    }
+    const registry = new ProviderRegistry();
+    registry.register({
+      ...memoryProvider,
+      id: ID,
+      schemes: [ID],
+      create: () => new ClosingDisk(),
+    });
+    const configStore = new InMemoryConfigStore();
+    await configStore.save(config(ID));
+    const logged: LogLevel[] = [];
+    const logger: Logger = {
+      log: (level) => logged.push(level),
+      child: () => logger,
+    };
+    const connections = manager({ registry, configStore });
+    later(() => connections[Symbol.asyncDispose]());
+    await connections.acquire(ID);
+    const mounts = new WorkspaceMounts(new FakeWorkspace());
+    later(() => mounts.dispose());
+    const tree = new ConnectionsTreeProvider({
+      manager: connections,
+      configStore,
+      registry,
+      cache: new EntryCache(),
+      logger,
+      mounts,
+    });
+
+    const children = tree.getChildren({ kind: 'connection', config: config(ID) });
+    await connections.disconnect(ID);
+    closeUnderIt();
+
+    assert.deepEqual(await children, []);
+    assert.deepEqual(logged, ['debug']);
   });
 });
 
 suite('forgetting a removed connection', () => {
   const ID = 'mounts-forget';
+  const later = cleanups();
 
-  interface Forget {
-    readonly deps: ForgetDeps;
-    readonly disk: MemoryFileSystem;
-    readonly host: FakeWorkspace;
-    dispose(): void;
+  /** A keychain that will not let go, as a locked one or a D-Bus failure does. */
+  class StuckSecretStore extends InMemorySecretStore {
+    override async delete(): Promise<void> {
+      throw new Error('keychain locked');
+    }
   }
 
-  async function forget(host: FakeWorkspace): Promise<Forget> {
+  async function forget(
+    host: FakeWorkspace,
+    secretStore: InMemorySecretStore = new InMemorySecretStore(),
+  ): Promise<{ deps: ForgetDeps; disk: MemoryFileSystem }> {
     const disk = new MemoryFileSystem();
     const registry = new ProviderRegistry();
     registry.register({ ...memoryProvider, id: ID, schemes: [ID], create: () => disk });
     const configStore = new InMemoryConfigStore();
     await configStore.save(config(ID));
-    const secretStore = new InMemorySecretStore();
     await secretStore.set(ID, { password: 'x' });
-    const manager = new ConnectionManager({
-      registry,
-      configStore,
-      secretStore,
-      logger: NOOP_LOGGER,
-    });
-    await manager.acquire(ID);
+    const connections = manager({ registry, configStore, secretStore });
+    later(() => connections[Symbol.asyncDispose]());
+    await connections.acquire(ID);
     const mounts = new WorkspaceMounts(host, { confirmTimeoutMs: 50 });
+    later(() => mounts.dispose());
     return {
       deps: {
-        manager,
+        manager: connections,
         configStore,
         secretStore,
         cache: new EntryCache(),
@@ -381,15 +538,12 @@ suite('forgetting a removed connection', () => {
         logger: NOOP_LOGGER,
       },
       disk,
-      host,
-      dispose: () => mounts.dispose(),
     };
   }
 
   test('deletes it, takes it out of the workspace and closes it', async () => {
-    const { deps, disk, host, dispose } = await forget(
-      new FakeWorkspace('file:///local', `omnifs://${ID}/`),
-    );
+    const host = new FakeWorkspace('file:///local', `omnifs://${ID}/`);
+    const { deps, disk } = await forget(host);
 
     assert.equal(await forgetConnection(deps, config(ID)), 'removed');
 
@@ -398,35 +552,45 @@ suite('forgetting a removed connection', () => {
     assert.deepEqual(host.uris, ['file:///local']);
     assert.equal(disk.isAlive(), false);
     assert.equal(deps.manager.getState(ID).status, 'disconnected');
-    dispose();
   });
 
-  test('has already deleted it when removing the folder kills the extension host', async () => {
+  test('has deleted and closed it when removing the folder kills the extension host', async () => {
     // Its first folder: VS Code restarts the extension host here, and nothing
     // after this call is guaranteed to run.
     const host = new FakeWorkspace(`omnifs://${ID}/`, 'file:///local');
     host.updateWorkspaceFolders = () => {
       throw new Error('extension host stopped');
     };
-    const { deps, dispose } = await forget(host);
+    const { deps, disk } = await forget(host);
 
     await assert.rejects(forgetConnection(deps, config(ID)), /extension host stopped/);
 
     assert.equal(await deps.configStore.get(ID), undefined);
     assert.equal(await deps.secretStore.get(ID), undefined);
-    dispose();
+    // Closed before the folder was touched: a connection left open would keep
+    // serving it, with no config left to say it was read-only.
+    assert.equal(disk.isAlive(), false);
+  });
+
+  test('closes it even when the keychain refuses to delete its credentials', async () => {
+    const host = new FakeWorkspace('file:///local', `omnifs://${ID}/`);
+    const { deps, disk } = await forget(host, new StuckSecretStore());
+
+    await assert.rejects(forgetConnection(deps, config(ID)), /keychain locked/);
+
+    assert.equal(await deps.configStore.get(ID), undefined);
+    assert.equal(disk.isAlive(), false);
   });
 
   test('still deletes it when VS Code refuses to remove the folder, and says so', async () => {
     const host = new FakeWorkspace('file:///local', `omnifs://${ID}/`);
     host.updateWorkspaceFolders = () => false;
-    const { deps, disk, dispose } = await forget(host);
+    const { deps, disk } = await forget(host);
 
     assert.equal(await forgetConnection(deps, config(ID)), 'refused');
 
     assert.equal(await deps.configStore.get(ID), undefined);
     assert.equal(disk.isAlive(), false);
-    dispose();
   });
 });
 

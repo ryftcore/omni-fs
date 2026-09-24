@@ -117,6 +117,17 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
       });
       return sorted;
     } catch (error) {
+      // A listing cut short by a disconnect — Disconnect removes the folder
+      // first, and that change redraws the tree just before the close — is
+      // not a failure worth a popup. A failed reconnect reads `error`, so it
+      // still gets one.
+      if (this.#manager.getState(connectionId).status === 'disconnected') {
+        this.#logger.log('debug', 'Tree listing ended by a disconnect', {
+          connectionId,
+          path: path.value,
+        });
+        return [];
+      }
       this.#logger.log('error', 'Tree could not list a folder', {
         connectionId,
         path: path.value,
