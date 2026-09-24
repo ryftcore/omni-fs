@@ -1,5 +1,4 @@
 import * as vscode from 'vscode';
-import { RemotePath } from '@omni-fs/core';
 import type {
   ConfigStore,
   ConnectionConfig,
@@ -11,10 +10,11 @@ import type {
   TransferQueue,
 } from '@omni-fs/core';
 import type { InitialSelection } from '@omni-fs/ui';
-import { OmniFileSystemProvider } from '../fs/omni-file-system-provider.js';
 import { describeError } from '../host/describe-error.js';
 import { ConnectionManagerPanel } from '../webview/connection-manager-panel.js';
 import type { ConnectionNode, ConnectionsTreeProvider } from '../views/connections-tree.js';
+import type { MountResult, WorkspaceMounts } from '../workspace/workspace-mounts.js';
+import { forgetConnection, logUnconfirmed } from './forget-connection.js';
 
 export interface CommandDeps {
   readonly extensionUri: vscode.Uri;
@@ -25,6 +25,7 @@ export interface CommandDeps {
   readonly transfers: TransferQueue;
   readonly cache: EntryCache;
   readonly connectionsTree: ConnectionsTreeProvider;
+  readonly mounts: WorkspaceMounts;
   readonly logger: Logger;
 }
 
@@ -61,6 +62,9 @@ export function registerCommands(deps: CommandDeps): vscode.Disposable[] {
     vscode.commands.registerCommand('omniFs.mountAsWorkspaceFolder', (node?: ConnectionNode) =>
       mount(deps, node),
     ),
+    vscode.commands.registerCommand('omniFs.removeFromWorkspace', (node?: ConnectionNode) =>
+      removeFromWorkspace(deps, node),
+    ),
     vscode.commands.registerCommand('omniFs.makeReadOnly', (node?: ConnectionNode) =>
       setReadOnly(deps, node, true),
     ),
@@ -91,6 +95,9 @@ function showPanel(deps: CommandDeps, selection?: InitialSelection): void {
       configStore: deps.configStore,
       secretStore: deps.secretStore,
       registry: deps.registry,
+      cache: deps.cache,
+      mounts: deps.mounts,
+      logger: deps.logger,
       onChanged: () => deps.connectionsTree.refresh(),
     },
     selection,
@@ -108,10 +115,7 @@ async function removeConnection(deps: CommandDeps, node?: ConnectionNode): Promi
   );
   if (confirmed !== 'Remove') return;
 
-  await deps.manager.disconnect(config.id);
-  await deps.configStore.delete(config.id);
-  await deps.secretStore.delete(config.id);
-  deps.cache.invalidateConnection(config.id);
+  await forgetConnection(deps, config);
   deps.connectionsTree.refresh();
 }
 
@@ -143,9 +147,32 @@ async function connectById(deps: CommandDeps, id: string, label: string): Promis
   deps.connectionsTree.refresh();
 }
 
+/**
+ * Closes the connection and takes it out of the workspace.
+ *
+ * Both, because a mounted folder cannot stay disconnected: the next thing VS
+ * Code reads from it — a stat, a search, its `.vscode/settings.json`, the
+ * Explorer refreshing when the window regains focus — reconnects, undoing the
+ * disconnect moments after the click. Only this explicit Disconnect unmounts.
+ * An idle or config-changed disconnect keeps the folder, which reconnects on
+ * next use, because the user never asked for it to go.
+ */
 async function disconnect(deps: CommandDeps, node?: ConnectionNode): Promise<void> {
   const config = await resolveConfig(deps, node);
   if (config === undefined) return;
+
+  const unmounted = await deps.mounts.unmount(config.id);
+  if (unmounted === 'refused') {
+    deps.logger.log('warn', 'Could not remove a disconnected connection from the workspace', {
+      connectionId: config.id,
+    });
+    void vscode.window.showWarningMessage(
+      `Omni-FS: "${config.label}" is still in the workspace, so opening its folder will reconnect it.`,
+    );
+  } else if (unmounted === 'unconfirmed') {
+    logUnconfirmed(deps.logger, config.id);
+  }
+
   await deps.manager.disconnect(config.id);
   deps.cache.invalidateConnection(config.id);
   deps.connectionsTree.refresh();
@@ -181,37 +208,80 @@ async function setReadOnly(
  * Adds the connection root to the workspace. This is the payoff of implementing
  * FileSystemProvider: search, quick-open, git-less diffing and the Explorer all
  * start working against the remote with no further code.
+ *
+ * Opening a connection that is already open shows its folder instead. The
+ * tree only offers this command to unmounted connections, so that is reached
+ * from the Command Palette — where a second folder or an error would both be
+ * the wrong answer to "open this".
+ *
+ * Resolves to what happened, for whoever runs the command programmatically.
  */
-async function mount(deps: CommandDeps, node?: ConnectionNode): Promise<void> {
+async function mount(deps: CommandDeps, node?: ConnectionNode): Promise<MountResult | undefined> {
   const config = await resolveConfig(deps, node);
-  if (config === undefined) return;
+  if (config === undefined) return undefined;
 
-  const uri = OmniFileSystemProvider.toUri(config.id, RemotePath.parse(config.rootPath ?? '/'));
+  const result = await deps.mounts.mount(config);
 
-  const added = vscode.workspace.updateWorkspaceFolders(
-    vscode.workspace.workspaceFolders?.length ?? 0,
-    0,
-    { uri, name: config.label },
-  );
+  if (result === 'already-mounted') {
+    const [folder] = deps.mounts.foldersOf(config.id);
+    if (folder !== undefined) await vscode.commands.executeCommand('revealInExplorer', folder.uri);
+    return 'already-mounted';
+  }
 
-  if (!added) {
+  if (result === 'refused') {
     deps.logger.log('error', 'Could not add a connection to the workspace', {
       connectionId: config.id,
-      uri: uri.toString(),
     });
     void vscode.window.showErrorMessage(`Could not add "${config.label}" to the workspace.`);
+    return 'refused';
+  }
+
+  return 'added';
+}
+
+/**
+ * Takes the connection's folder out of the workspace and leaves the
+ * connection as it is: still browsable in the tree, and closed by the idle
+ * timeout like any other — unless the folder was the workspace's first. VS
+ * Code then restarts the extension host, and this connection and every other
+ * one close with it.
+ */
+async function removeFromWorkspace(deps: CommandDeps, node?: ConnectionNode): Promise<void> {
+  const config = await resolveConfig(deps, node, {
+    only: (candidate) => deps.mounts.isMounted(candidate.id),
+    none: 'No connection is open in the workspace.',
+  });
+  if (config === undefined) return;
+
+  const unmounted = await deps.mounts.unmount(config.id);
+  if (unmounted === 'refused') {
+    deps.logger.log('error', 'Could not remove a connection from the workspace', {
+      connectionId: config.id,
+    });
+    void vscode.window.showErrorMessage(`Could not remove "${config.label}" from the workspace.`);
+  } else if (unmounted === 'unconfirmed') {
+    logUnconfirmed(deps.logger, config.id);
   }
 }
 
+/**
+ * The connection a command applies to: the tree node it was run on, or one
+ * picked from the palette. `only` narrows the pick list, never the node — the
+ * tree's menus already decide which nodes a command is offered on.
+ */
 async function resolveConfig(
   deps: CommandDeps,
   node?: ConnectionNode,
+  filter?: { readonly only: (config: ConnectionConfig) => boolean; readonly none: string },
 ): Promise<ConnectionConfig | undefined> {
   if (node?.kind === 'connection') return node.config;
 
-  const configs = await deps.configStore.list();
+  const stored = await deps.configStore.list();
+  const configs = filter === undefined ? stored : stored.filter(filter.only);
   if (configs.length === 0) {
-    void vscode.window.showInformationMessage('No connections configured yet.');
+    void vscode.window.showInformationMessage(
+      stored.length === 0 || filter === undefined ? 'No connections configured yet.' : filter.none,
+    );
     return undefined;
   }
 

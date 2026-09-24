@@ -148,6 +148,15 @@ connection status, connect/disconnect, credential management, and browsing a
 server you have not mounted. Both read through the same `ConnectionManager` and
 `EntryCache`, so expanding a folder in one warms the cache for the other.
 
+Which connections are mounted is a third piece of state, and VS Code owns it:
+the user can remove a folder from the Explorer, and a saved workspace brings
+one back on the next start. So the tree keeps no copy — `WorkspaceMounts` reads
+`vscode.workspace.workspaceFolders` each time it is asked. A mounted folder
+reconnects on use, since VS Code reads from it whenever it likes; that is what
+mounting consents to. An explicit Disconnect therefore unmounts too, or the next
+read would undo it. An idle or config-changed disconnect does not, because the
+user never asked for the folder to go.
+
 ## Credentials
 
 `ConnectionConfig` and `ConnectionSecret` are separate types on purpose.

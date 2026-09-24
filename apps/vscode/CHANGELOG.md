@@ -3,6 +3,22 @@
 Odd minor versions (0.1.x, 0.3.x) are pre-releases; even minor versions are
 stable.
 
+## Unreleased
+
+### Fixed
+
+- **Disconnect takes a connection out of the workspace.** A connection opened
+  as a workspace folder stayed in the Explorer after Disconnect, and the next
+  thing VS Code read from the folder connected it again. Removing a connection
+  now removes its folder too, instead of leaving one that no longer opens.
+- **Opening a connection that is already a workspace folder** shows that folder,
+  instead of an error saying it could not be added.
+
+### Added
+
+- **Remove from Workspace**, offered in place of Open as Workspace Folder once a
+  connection is open there. The sidebar marks such a connection _in workspace_.
+
 ## 0.1.3
 
 ### Fixed

@@ -99,6 +99,12 @@
         "icon": "$(root-folder)"
       },
       {
+        "command": "omniFs.removeFromWorkspace",
+        "title": "Remove from Workspace",
+        "category": "Omni-FS",
+        "icon": "$(close)"
+      },
+      {
         "command": "omniFs.makeReadOnly",
         "title": "Make Read-only",
         "category": "Omni-FS",
@@ -177,7 +183,12 @@
         },
         {
           "command": "omniFs.mountAsWorkspaceFolder",
-          "when": "view == omniFs.connections && viewItem =~ /^connection\\./",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\.[^.]+\\.unmounted\\./",
+          "group": "1_open@1"
+        },
+        {
+          "command": "omniFs.removeFromWorkspace",
+          "when": "view == omniFs.connections && viewItem =~ /^connection\\.[^.]+\\.mounted\\./",
           "group": "1_open@1"
         },
         {
@@ -378,7 +389,7 @@
     "dev": "node esbuild.mjs --watch --tests",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.webview.json --noEmit && tsc -p tsconfig.test.json --noEmit",
     "build:tests": "node esbuild.mjs --tests-only",
-    "test:extension": "node esbuild.mjs --tests-only && vscode-test --label hermetic",
+    "test:extension": "node esbuild.mjs --tests-only && vscode-test --label hermetic && vscode-test --label workspace",
     "test:extension:live": "node esbuild.mjs --tests-only && vscode-test --label live",
     "lint": "eslint src",
     "package": "rm -rf out && node esbuild.mjs --production && vsce package --no-dependencies",
