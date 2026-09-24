@@ -94,9 +94,9 @@ const webview = {
  * failing assertion inside an Electron host is read off its stack trace or not
  * at all.
  *
- * `outbase` keeps `hermetic/` and `live/` as real directories under
- * `out-test/`, which is what the two `files` globs in `.vscode-test.mjs`
- * select on.
+ * `outbase` keeps `hermetic/`, `workspace/` and `live/` as real directories
+ * under `out-test/`, which is what the three `files` globs in
+ * `.vscode-test.mjs` select on.
  *
  * The entry set is a snapshot, taken once when a test build is assembled.
  * esbuild then watches the import graph of the entries it was handed, so under
@@ -128,8 +128,8 @@ function testEntryPoints() {
  * the guard inside it — only runs when tests are actually being built. At
  * module load it also ran for `--production`, which made a broken test glob
  * fail `pnpm package:vsix` with a message about tests. Every path that does
- * build tests still reaches it: `--tests-only` (`build:tests`, and so both
- * `vscode-test` labels and the CI jobs that call them) and `--tests` (the F5
+ * build tests still reaches it: `--tests-only` (`build:tests`, and so every
+ * `vscode-test` label and the CI jobs that call them) and `--tests` (the F5
  * watch loop).
  *
  * @returns {import('esbuild').BuildOptions}

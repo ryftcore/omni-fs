@@ -4,6 +4,8 @@ import type {
   ConfigStore,
   ConnectionConfig,
   ConnectionManager,
+  EntryCache,
+  Logger,
   ProviderRegistry,
   SecretStore,
 } from '@omni-fs/core';
@@ -14,6 +16,8 @@ import type {
   SaveConnectionInput,
   TestConnectionInput,
 } from '@omni-fs/ui';
+import { forgetConnection } from '../commands/forget-connection.js';
+import type { WorkspaceMounts } from '../workspace/workspace-mounts.js';
 import type { HostToView, MethodName, ViewToHost } from './protocol.js';
 
 export interface PanelDeps {
@@ -22,6 +26,9 @@ export interface PanelDeps {
   readonly configStore: ConfigStore;
   readonly secretStore: SecretStore;
   readonly registry: ProviderRegistry;
+  readonly cache: EntryCache;
+  readonly mounts: WorkspaceMounts;
+  readonly logger: Logger;
   readonly onChanged: () => void;
 }
 
@@ -229,9 +236,7 @@ export class ConnectionManagerPanel {
     );
     if (confirmed !== 'Remove') return;
 
-    await this.#deps.manager.disconnect(id);
-    await this.#deps.configStore.delete(id);
-    await this.#deps.secretStore.delete(id);
+    await forgetConnection(this.#deps, { id, label: config?.label ?? id });
     this.#deps.onChanged();
   }
 

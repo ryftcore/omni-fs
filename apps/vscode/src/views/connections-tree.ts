@@ -12,6 +12,7 @@ import type {
 } from '@omni-fs/core';
 import { OmniFileSystemProvider } from '../fs/omni-file-system-provider.js';
 import { describeError } from '../host/describe-error.js';
+import type { WorkspaceMounts } from '../workspace/workspace-mounts.js';
 
 export type ConnectionNode =
   | { readonly kind: 'connection'; readonly config: ConnectionConfig }
@@ -37,6 +38,7 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
   readonly #registry: ProviderRegistry;
   readonly #cache: EntryCache;
   readonly #logger: Logger;
+  readonly #mounts: WorkspaceMounts;
   readonly #emitter = new vscode.EventEmitter<ConnectionNode | undefined>();
 
   readonly onDidChangeTreeData = this.#emitter.event;
@@ -47,15 +49,19 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
     registry: ProviderRegistry;
     cache: EntryCache;
     logger: Logger;
+    mounts: WorkspaceMounts;
   }) {
     this.#manager = options.manager;
     this.#configStore = options.configStore;
     this.#registry = options.registry;
     this.#cache = options.cache;
     this.#logger = options.logger;
+    this.#mounts = options.mounts;
 
     this.#manager.onDidChangeState(() => this.refresh());
     this.#configStore.onDidChange(() => this.refresh());
+    // Including a folder the user removes with the Explorer's own command.
+    this.#mounts.onDidChange(() => this.refresh());
   }
 
   refresh(node?: ConnectionNode): void {
@@ -135,15 +141,24 @@ export class ConnectionsTreeProvider implements vscode.TreeDataProvider<Connecti
     );
 
     item.id = config.id;
-    const providerName = provider?.displayName ?? config.providerId;
-    item.description = config.readOnly === true ? `${providerName} · read-only` : providerName;
-    // `connection.<status>.<access>`: the manifest matches on both halves, to
-    // offer Connect or Disconnect and Make Read-only or Make Writable.
-    item.contextValue = `connection.${state.status === 'connected' ? 'connected' : 'disconnected'}.${
-      config.readOnly === true ? 'readOnly' : 'writable'
-    }`;
+    const mounted = this.#mounts.isMounted(config.id);
+    item.description = [
+      provider?.displayName ?? config.providerId,
+      ...(config.readOnly === true ? ['read-only'] : []),
+      ...(mounted ? ['in workspace'] : []),
+    ].join(' · ');
+    // `connection.<status>.<mount>.<access>`: the manifest matches on each
+    // part, to offer Connect or Disconnect, Open as Workspace Folder or Remove
+    // from Workspace, and Make Read-only or Make Writable. Access stays last
+    // because the clauses for it anchor on `$`.
+    item.contextValue = [
+      'connection',
+      state.status === 'connected' ? 'connected' : 'disconnected',
+      mounted ? 'mounted' : 'unmounted',
+      config.readOnly === true ? 'readOnly' : 'writable',
+    ].join('.');
     item.iconPath = statusIcon(state);
-    item.tooltip = buildTooltip(config, state, provider?.displayName);
+    item.tooltip = buildTooltip(config, state, provider?.displayName, mounted);
     // Also what tints the label: `ConnectionDecorationProvider` colours every
     // resource of a tagged connection, this node included.
     item.resourceUri = OmniFileSystemProvider.toUri(config.id, RemotePath.ROOT);
@@ -210,6 +225,7 @@ function buildTooltip(
   config: ConnectionConfig,
   state: ConnectionState,
   providerName: string | undefined,
+  mounted: boolean,
 ): vscode.MarkdownString {
   const lines = [`**${config.label}**`, '', `Provider: ${providerName ?? config.providerId}`];
 
@@ -217,6 +233,7 @@ function buildTooltip(
     lines.push(`Connected since ${new Date(state.since).toLocaleTimeString()}`);
   if (state.status === 'error') lines.push(`⚠️ ${state.error}`);
   if (config.readOnly === true) lines.push('🔒 Read-only');
+  if (mounted) lines.push('📂 Open as a workspace folder');
 
   return new vscode.MarkdownString(lines.join('\n\n'));
 }

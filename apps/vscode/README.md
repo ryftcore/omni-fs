@@ -74,7 +74,19 @@ listed above works against every protocol.
 ![The connection manager with an S3-compatible connection selected](https://raw.githubusercontent.com/ryftcore/omni-fs/main/apps/vscode/media/connections.png)
 
 To work in a remote folder as if it were local, right-click the connection and
-choose **Open as Workspace Folder**.
+choose **Open as Workspace Folder**. The sidebar then marks it _in workspace_,
+and the same menu offers **Remove from Workspace** instead.
+
+**Disconnect** takes the folder out of the workspace as well: while it is
+there, VS Code reads from it whenever it likes, and each read would connect
+again. A connection closed for being idle stays in the workspace and reconnects
+when you next use it.
+
+VS Code restarts extensions, closing every open connection, whenever the first
+folder in the workspace changes. In a window with no folder open yet, that
+includes opening a connection there, and later disconnecting it or removing it
+from the workspace. Open a local folder first to keep remote ones out of that
+position.
 
 ### Connecting to S3-compatible storage
 

@@ -35,6 +35,11 @@ host and drives `vscode.workspace.fs` over an in-memory provider, and
 `pnpm test:extension:live` runs the _minified_ production bundle against the
 `compose.yaml` servers — the only thing that proves esbuild did not break a
 protocol SDK. Neither joins `pnpm test`, which stays hermetic and fast.
+`test:extension` runs two labels back to back: `hermetic`, in a single-folder
+window, and `workspace`, in a generated multi-root workspace with a fresh
+profile — the only window in which VS Code lets a test add a workspace folder.
+Never add one from the `hermetic` label: VS Code refuses, then refuses every
+folder update for the rest of the run.
 
 `pnpm test` in `packages/testing` is the conformance suite, and is where most
 behaviour is actually verified. `packages/ui` runs its tests without jsdom —

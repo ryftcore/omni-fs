@@ -9,6 +9,7 @@ import { VsCodeConfigStore, VsCodeLogger, VsCodeSecretStore } from './host/vscod
 import { ConnectionDecorationProvider } from './views/connection-decorations.js';
 import { ConnectionsTreeProvider } from './views/connections-tree.js';
 import { TransfersTreeProvider } from './views/transfers-tree.js';
+import { WorkspaceMounts } from './workspace/workspace-mounts.js';
 import { registerCommands } from './commands/index.js';
 
 /**
@@ -75,12 +76,14 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
 
   // 4. VS Code surfaces.
   const fileSystemProvider = new OmniFileSystemProvider({ manager, configStore, cache, logger });
+  const mounts = new WorkspaceMounts();
   const connectionsTree = new ConnectionsTreeProvider({
     manager,
     configStore,
     registry,
     cache,
     logger,
+    mounts,
   });
   const transfersTree = new TransfersTreeProvider(transfers);
   const decorations = new ConnectionDecorationProvider(configStore);
@@ -99,6 +102,7 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
     vscode.window.createTreeView('omniFs.transfers', { treeDataProvider: transfersTree }),
     decorations,
     vscode.window.registerFileDecorationProvider(decorations),
+    mounts,
     ...registerCommands({
       extensionUri: context.extensionUri,
       manager,
@@ -108,6 +112,7 @@ export function activate(context: vscode.ExtensionContext): OmniFsApi {
       transfers,
       cache,
       connectionsTree,
+      mounts,
       logger,
     }),
     // `Disposable` from core is the TS 5.2 `Symbol.dispose` protocol; VS Code
