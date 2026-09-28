@@ -39,7 +39,7 @@ services:
   # It runs as a non-root user, so a `minio-data` volume that the old image
   # wrote as root is not writable by it: `docker compose down -v` once.
   minio:
-    image: cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+    image: cgr.dev/chainguard/minio:latest@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: omnifs
@@ -61,7 +61,7 @@ services:
   minio-init:
     # The server image again, for its shell: Chainguard's `mc`-only image has
     # none, and this script needs one, and `head`.
-    image: cgr.dev/chainguard/minio:latest@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1
+    image: cgr.dev/chainguard/minio:latest@sha256:6a1d0b45c8669726bba580ced0bfa4cb9fdeed1ed636dfabd81d1577beb6937b
     depends_on:
       minio:
         condition: service_healthy
