@@ -30,6 +30,6 @@
     "@omni-fs/testing": "workspace:*",
     "@types/node": "^22.20.4",
     "typescript": "^6.0.3",
-    "vitest": "^5.0.0"
+    "vitest": "^5.0.2"
   }
 }
