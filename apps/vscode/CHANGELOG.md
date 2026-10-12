@@ -3,6 +3,19 @@
 Odd minor versions (0.1.x, 0.3.x) are pre-releases; even minor versions are
 stable.
 
+## 0.1.5
+
+### Security
+
+- **Build and test tooling patched against published advisories.**
+  source-map-js (GHSA-68fv-2mgg-jv7q), diff (GHSA-73rr-hh4g-fpgx) and
+  serialize-javascript (GHSA-gfhx-hw2g-v5hg) are moved to fixed releases. None
+  of them is bundled into the extension; this release is built with them.
+
+### Changed
+
+- AWS SDK and WebDAV client updated.
+
 ## 0.1.4
 
 ### Fixed
